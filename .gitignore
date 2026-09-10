@@ -1,0 +1,17 @@
+# Rust
+bridge/target/
+tools/dispatch-gen/target/
+
+# Build outputs
+dist/
+app/Generated/
+app/Vendor/
+app/*.xcodeproj/
+app/build/
+app/DerivedData/
+*.ipa
+*.xcarchive
+
+# macOS / editor
+.DS_Store
+*.swp

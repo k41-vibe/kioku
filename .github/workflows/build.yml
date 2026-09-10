@@ -1,0 +1,254 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish a GitHub Release with this tag (e.g. v0.1.0). Leave empty to only build."
+        type: string
+        default: ""
+      run_tests:
+        description: "Run simulator tests"
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_TOOLCHAIN: "1.95"
+  IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  WITH_SIM: "1"
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - name: Checkout (with anki submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Toolchain versions
+        id: meta
+        run: |
+          xcodebuild -version
+          echo "anki_sha=$(git -C anki rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "core_hash=${{ hashFiles('bridge/Cargo.toml', 'bridge/src/**', 'bridge/include/**', 'tools/dispatch-gen/**', 'scripts/build-xcframework.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Homebrew deps
+        run: brew install protobuf swift-protobuf xcodegen
+
+      # Fast path: the finished core (xcframework + descriptor set) is cached by its inputs.
+      - name: Restore built core
+        id: core-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/core/AnkiRustLib.xcframework
+            dist/core/anki_descriptors.bin
+            dist/core/anki_commit.txt
+          key: core-v3-${{ steps.meta.outputs.anki_sha }}-${{ steps.meta.outputs.core_hash }}-rust${{ env.RUST_TOOLCHAIN }}-ios${{ env.IPHONEOS_DEPLOYMENT_TARGET }}-sim${{ env.WITH_SIM }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bridge/target
+            tools/dispatch-gen/target
+          key: cargo-v3-${{ runner.os }}-rust${{ env.RUST_TOOLCHAIN }}-${{ steps.meta.outputs.anki_sha }}-${{ steps.meta.outputs.core_hash }}
+          restore-keys: |
+            cargo-v3-${{ runner.os }}-rust${{ env.RUST_TOOLCHAIN }}-${{ steps.meta.outputs.anki_sha }}-
+            cargo-v3-${{ runner.os }}-rust${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Build Rust XCFramework
+        if: steps.core-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-xcframework.sh
+
+      - name: Generate Swift protos + AnkiRPC.swift
+        run: ./scripts/generate-protos.sh
+
+      - name: Package core
+        run: ./scripts/package.sh
+
+      - name: Upload core artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: anki-core
+          path: |
+            dist/core/AnkiRustLib.xcframework.zip
+            dist/core/AnkiProtoSwift.zip
+            dist/core/manifest.json
+          retention-days: 14
+
+      # ---------------------------------------------------------------- app
+      - name: Detect app
+        id: app
+        run: |
+          if [ -f app/project.yml ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Stage core into app
+        if: steps.app.outputs.present == 'true'
+        run: |
+          rm -rf app/Vendor app/Generated
+          mkdir -p app/Vendor app/Generated
+          cp -R dist/core/AnkiRustLib.xcframework app/Vendor/
+          cp dist/core/AnkiProtoSwift/*.swift app/Generated/
+          ls app/Generated | head -40
+
+      - name: Cache SwiftPM
+        if: steps.app.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/spm
+          key: spm-${{ runner.os }}-${{ hashFiles('app/project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Generate Xcode project
+        if: steps.app.outputs.present == 'true'
+        run: cd app && xcodegen generate
+
+      - name: Pick simulator
+        if: steps.app.outputs.present == 'true' && (github.event_name != 'workflow_dispatch' || inputs.run_tests)
+        id: sim
+        run: |
+          NAME=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)["devices"]
+          names=[dev["name"] for rt,devs in d.items() if "iOS" in rt for dev in devs if dev["name"].startswith("iPhone")]
+          print(sorted(names)[-1] if names else "")')
+          echo "Using simulator: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run simulator tests
+        if: steps.app.outputs.present == 'true' && steps.sim.outputs.name != ''
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cd app
+          xcodebuild test \
+            -project Kioku.xcodeproj \
+            -scheme Kioku \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E "error:|warning: unre|Test Case|Test Suite|Executed|\*\* TEST" || true
+          tail -5 "$RUNNER_TEMP/test.log"
+          grep -q "\*\* TEST SUCCEEDED \*\*" "$RUNNER_TEMP/test.log"
+
+      - name: Upload test log
+        if: steps.app.outputs.present == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: ${{ runner.temp }}/test.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Archive (unsigned, device)
+        if: steps.app.outputs.present == 'true'
+        run: |
+          set -o pipefail
+          cd app
+          xcodebuild archive \
+            -project Kioku.xcodeproj \
+            -scheme Kioku \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/Kioku.xcarchive" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E "error:|Undefined symbols|ld: |\*\* ARCHIVE" || true
+          test -d "$RUNNER_TEMP/Kioku.xcarchive/Products/Applications/Kioku.app" || { echo "::error::archive failed"; tail -60 "$RUNNER_TEMP/archive.log"; exit 1; }
+
+      - name: Upload archive log
+        if: steps.app.outputs.present == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-log
+          path: ${{ runner.temp }}/archive.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Package IPA
+        if: steps.app.outputs.present == 'true'
+        id: ipa
+        run: |
+          rm -rf "$RUNNER_TEMP/Payload" && mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/Kioku.xcarchive/Products/Applications/Kioku.app" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && rm -f Kioku.ipa && zip -qry Kioku.ipa Payload)
+          ls -lh "$RUNNER_TEMP/Kioku.ipa"
+          echo "sha256=$(shasum -a 256 "$RUNNER_TEMP/Kioku.ipa" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          file "$RUNNER_TEMP/Payload/Kioku.app/Kioku"
+
+      - name: Upload IPA
+        if: steps.app.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kioku-ipa
+          path: ${{ runner.temp }}/Kioku.ipa
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Kioku build"
+            echo "- anki: \`${{ steps.meta.outputs.anki_sha }}\`"
+            echo "- core cache hit: ${{ steps.core-cache.outputs.cache-hit }}"
+            echo "- tests: ${{ steps.tests.outcome || 'skipped' }}"
+            echo "- ipa sha256: \`${{ steps.ipa.outputs.sha256 }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish Release
+        if: steps.app.outputs.present == 'true' && (github.ref_type == 'tag' || inputs.release_tag != '')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+          name: Kioku ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+          draft: false
+          prerelease: false
+          files: |
+            ${{ runner.temp }}/Kioku.ipa
+            dist/core/manifest.json
+          body: |
+            ## Kioku ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}
+
+            未署名の iOS アプリ(.ipa)です。LiveContainer / AltStore / Sideloadly で自分の Apple ID を使って入れてください。
+            導入手順と使い方は [README](https://github.com/${{ github.repository }}#readme) を参照。
+
+            - anki core: `${{ steps.meta.outputs.anki_sha }}`
+            - simulator tests: ${{ steps.tests.outcome || 'skipped' }}
+            - `Kioku.ipa` SHA-256: `${{ steps.ipa.outputs.sha256 }}`
+
+            License: AGPL-3.0 (includes the [ankitects/anki](https://github.com/ankitects/anki) Rust backend). Source: https://github.com/${{ github.repository }}/tree/${{ github.sha }}

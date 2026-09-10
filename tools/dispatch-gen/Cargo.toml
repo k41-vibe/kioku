@@ -1,0 +1,11 @@
+[package]
+name = "dispatch-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Emits AnkiRPC.swift (service/method indices) from anki's protobuf descriptor set"
+
+[dependencies]
+anki_proto_gen = { path = "../../anki/rslib/proto_gen" }
+prost-reflect = "0.14"

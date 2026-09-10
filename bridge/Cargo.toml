@@ -1,0 +1,23 @@
+[package]
+name = "anki-bridge-ios"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Minimal C ABI around the Anki Rust backend (rslib) for iOS"
+
+[lib]
+name = "anki_bridge_ios"
+crate-type = ["staticlib"]
+
+[dependencies]
+anki = { path = "../anki/rslib", features = ["rustls"] }
+anki_proto = { path = "../anki/rslib/proto" }
+prost = "0.13"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

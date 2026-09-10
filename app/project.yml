@@ -1,0 +1,104 @@
+name: Kioku
+options:
+  bundleIdPrefix: dev.k41
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+packages:
+  SwiftProtobuf:
+    url: https://github.com/apple/swift-protobuf.git
+    from: "1.28.0"
+
+targets:
+  Kioku:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Generated
+    dependencies:
+      - framework: Vendor/AnkiRustLib.xcframework
+        embed: false
+      - package: SwiftProtobuf
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Kioku
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: false
+        UIRequiresFullScreen: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Anki Deck Package
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - net.ankiweb.apkg
+              - net.ankiweb.colpkg
+              - public.zip-archive
+              - public.data
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: net.ankiweb.apkg
+            UTTypeDescription: Anki Deck Package
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [apkg]
+          - UTTypeIdentifier: net.ankiweb.colpkg
+            UTTypeDescription: Anki Collection Package
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [colpkg]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.k41.kioku
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        ENABLE_BITCODE: "NO"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        DEAD_CODE_STRIPPING: "YES"
+      configs:
+        Debug:
+          ENABLE_TESTABILITY: "YES"
+
+  KiokuTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Kioku
+      - package: SwiftProtobuf
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.k41.kioku.tests
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+
+schemes:
+  Kioku:
+    build:
+      targets:
+        Kioku: all
+        KiokuTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - KiokuTests
+    archive:
+      config: Release

@@ -116,7 +116,7 @@ final class AppModel {
     }
 
     /// Cheap sanity check before handing the file to rslib: it must be a zip.
-    static func validatePackage(at url: URL) throws {
+    nonisolated static func validatePackage(at url: URL) throws {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let magic = try handle.read(upToCount: 4) ?? Data()

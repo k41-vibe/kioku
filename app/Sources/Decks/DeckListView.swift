@@ -151,7 +151,7 @@ struct DeckListView: View {
                     .font(.caption2).foregroundStyle(Theme.gray2).multilineTextAlignment(.center).padding(.horizontal, 32)
             }
             Spacer()
-            Text("core: anki 26.08.1 / bridge \(AnkiBackend.bridgeVersion)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 8)
+            Text(AppInfo.footer).font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -262,7 +262,7 @@ struct SettingsView: View {
                 Section("このアプリ") {
                     Text("Kioku は Anki の Rust コア(rslib)をそのまま組み込んでいます。スケジューリング(FSRS / SM-2)、.apkg 取り込み、カード描画、統計はすべて本家と同じコードで動きます。")
                         .font(.footnote).foregroundStyle(Theme.gray1)
-                    Text("anki 26.08.1 · bridge \(AnkiBackend.bridgeVersion) · AGPL-3.0").font(.caption2).foregroundStyle(Theme.gray2)
+                    Text(AppInfo.footer + " · AGPL-3.0").font(.caption2).foregroundStyle(Theme.gray2)
                 }
             }
             .navigationTitle("設定")

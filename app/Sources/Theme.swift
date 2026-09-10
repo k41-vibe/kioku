@@ -51,6 +51,17 @@ enum Theme {
     """
 }
 
+enum AppInfo {
+    static var version: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
+    }
+    static var footer: String {
+        "Kioku \(version) · anki 26.08.1 · bridge \(AnkiBackend.bridgeVersion)"
+    }
+}
+
 extension UIColor {
     convenience init(hex: UInt32) {
         self.init(

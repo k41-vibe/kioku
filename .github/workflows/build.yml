@@ -172,6 +172,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Version from tag
+        id: ver
+        run: |
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}"
+          V="${TAG#v}"; [ -n "$V" ] || V="0.0.$(date -u +%Y%m%d)"
+          echo "marketing=$V" >> "$GITHUB_OUTPUT"
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "version $V build ${{ github.run_number }}"
+
       - name: Archive (unsigned, device)
         if: steps.app.outputs.present == 'true'
         run: |
@@ -187,6 +196,7 @@ jobs:
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/spm" \
             -skipPackagePluginValidation -skipMacroValidation \
             ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="${{ steps.ver.outputs.marketing }}" CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}" \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E "error:|Undefined symbols|ld: |\*\* ARCHIVE" || true
           test -d "$RUNNER_TEMP/Kioku.xcarchive/Products/Applications/Kioku.app" || { echo "::error::archive failed"; tail -60 "$RUNNER_TEMP/archive.log"; exit 1; }

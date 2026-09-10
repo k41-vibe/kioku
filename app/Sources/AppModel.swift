@@ -33,6 +33,18 @@ final class AppModel {
     var importSummary: ImportSummary?
     var isImporting = false
     var undoLabel: String = ""
+    /// .apkg files found in Documents (dropped there via the Files app).
+    var pendingPackages: [URL] = []
+    /// Recent import diagnostics, newest last (shown in settings).
+    var importLog: [String] = []
+    /// URLs handed to us (share sheet / open-in) before the collection was ready.
+    private var queuedOpenURLs: [URL] = []
+
+    private func log(_ s: String) {
+        let stamp = Date().formatted(date: .omitted, time: .standard)
+        importLog.append("[\(stamp)] \(s)")
+        if importLog.count > 40 { importLog.removeFirst(importLog.count - 40) }
+    }
 
     var forceMonochrome: Bool {
         get { UserDefaults.standard.object(forKey: "forceMonochrome") as? Bool ?? true }
@@ -49,12 +61,46 @@ final class AppModel {
             self.client = client
             state = .ready
             await refreshDecks()
+            scanDocuments()
             Task.detached(priority: .background) {
                 _ = try? await client.perform { c in try c.createBackup(force: false) }
             }
+            let queued = queuedOpenURLs
+            queuedOpenURLs.removeAll()
+            for url in queued { await importPackage(from: url) }
         } catch {
             state = .failed("\(error)")
         }
+    }
+
+    /// Called from onOpenURL. Defers until the collection is open.
+    func handleOpenURL(_ url: URL) async {
+        log("open-url: \(url.lastPathComponent) (\(url.scheme ?? "?"))")
+        if client == nil {
+            queuedOpenURLs.append(url)
+            return
+        }
+        await importPackage(from: url)
+    }
+
+    func scanDocuments() {
+        pendingPackages = CollectionPaths.pendingPackages()
+    }
+
+    /// Import every package sitting in Documents, then move it to Documents/imported.
+    func importPendingPackages() async {
+        let files = CollectionPaths.pendingPackages()
+        for file in files {
+            let ok = await importPackage(from: file)
+            if ok {
+                let dest = CollectionPaths.importedFolder
+                try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+                let target = dest.appendingPathComponent(file.lastPathComponent)
+                try? FileManager.default.removeItem(at: target)
+                try? FileManager.default.moveItem(at: file, to: target)
+            }
+        }
+        scanDocuments()
     }
 
     func refreshDecks() async {
@@ -85,33 +131,52 @@ final class AppModel {
 
     // MARK: - Import
 
-    func importPackage(from url: URL) async {
+    @discardableResult
+    func importPackage(from url: URL) async -> Bool {
         guard let client else {
-            errorMessage = "コレクションがまだ開いていません"
-            return
+            queuedOpenURLs.append(url)
+            log("queued (collection not open yet): \(url.lastPathComponent)")
+            return false
         }
         isImporting = true
         defer { isImporting = false }
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        log("import start: \(url.path) scoped=\(accessed)")
         do {
-            let dest = client.paths.inbox.appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.copyItem(at: url, to: dest)
-            defer { try? FileManager.default.removeItem(at: dest) }
+            let fm = FileManager.default
+            let name = url.lastPathComponent.isEmpty ? "package.apkg" : url.lastPathComponent
+            let dest = client.paths.inbox.appendingPathComponent(name)
+            try? fm.removeItem(at: dest)
+            do {
+                try fm.copyItem(at: url, to: dest)
+            } catch {
+                // Some providers refuse copyItem but allow reading; fall back to Data.
+                log("copyItem failed (\(error.localizedDescription)); trying Data read")
+                let data = try Data(contentsOf: url)
+                try data.write(to: dest)
+            }
+            defer { try? fm.removeItem(at: dest) }
+            let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? -1
+            log("copied \(size) bytes to inbox")
             try Self.validatePackage(at: dest)
             let resp = try await client.perform { c in try c.importAnkiPackage(at: dest.path) }
-            importSummary = ImportSummary(
-                fileName: url.lastPathComponent,
+            let summary = ImportSummary(
+                fileName: name,
                 added: resp.log.new.count,
                 updated: resp.log.updated.count,
                 duplicates: resp.log.duplicate.count,
                 conflicting: resp.log.conflicting.count,
                 found: Int(resp.log.foundNotes)
             )
+            log("import ok: \(summary.text)")
+            importSummary = summary
             await refreshDecks()
+            return true
         } catch {
+            log("import failed: \(error)")
             errorMessage = "取り込みに失敗しました: \(error)"
+            return false
         }
     }
 

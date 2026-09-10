@@ -30,9 +30,15 @@ PC の AltServer / Sideloadly に ipa をドラッグして Apple ID で署名�
 
 ### デッキを入れる
 
-- AnkiWeb の共有デッキなどから `.apkg` を iPhone に保存し、共有シートで **Kioku** を選ぶ(LiveContainer 経由なら LiveContainer → Kioku)
-- または Kioku の右上「取り込み」ボタンからファイルを選ぶ
-- 取り込み後、追加/更新/重複の枚数が出ます。同じファイルを再度入れても二重にはなりません(ノートの GUID で判定)
+3 通りあります。どれでも結果は同じです。
+
+1. **共有シート**: AnkiWeb などから `.apkg` を iPhone に保存し、ファイル App で共有 → **LiveContainer** → Kioku を選ぶ
+2. **取り込みボタン**: Kioku 右上の取り込みボタンからファイルを選ぶ(LiveContainer で「開く」が効かないときは LiveContainer の Kioku 設定で **Fix File Picker** を ON)
+3. **Documents に置く(いちばん確実)**: ファイル App で `.apkg` を Kioku の Documents フォルダに置き、Kioku を開く(または一覧を引き下げて更新)と「Documents に見つかったパッケージ」として出るので「取り込む」を押す。
+   LiveContainer の場合の場所: ファイル App → このiPhone内 → **LiveContainer → Data → Application → (Kioku の UUID) → Documents**。UUID は Kioku の設定画面「取り込みの記録」に表示されるパスで確認できます。取り込み済みのファイルは `Documents/imported/` に移動します。
+
+取り込み後、追加/更新/重複の枚数が出ます。同じファイルを再度入れても二重にはなりません(ノートの GUID で判定)。
+失敗したときは設定画面の「取り込みの記録」に理由が残ります。
 
 ### 学習する
 

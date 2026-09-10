@@ -16,6 +16,7 @@ struct DeckListView: View {
             Group {
                 if let tree = model.deckTree, !tree.children.isEmpty {
                     List {
+                        if !model.pendingPackages.isEmpty { pendingSection }
                         ForEach(tree.children, id: \.deckID) { node in
                             DeckRows(node: node, onRename: { renaming = $0; renameText = shortName($0.name) }, onDelete: { deleting = $0 })
                         }
@@ -26,9 +27,12 @@ struct DeckListView: View {
                         .listRowBackground(Color.clear)
                     }
                     .listStyle(.plain)
-                    .refreshable { await model.refreshDecks() }
+                    .refreshable { await model.refreshDecks(); model.scanDocuments() }
                 } else {
-                    emptyState
+                    ScrollView {
+                        emptyState.frame(minHeight: 520)
+                    }
+                    .refreshable { await model.refreshDecks(); model.scanDocuments() }
                 }
             }
             .background(Theme.paper)
@@ -52,8 +56,11 @@ struct DeckListView: View {
             .sheet(isPresented: $showStats) { StatsView(search: "") }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    Task { await model.importPackage(from: url) }
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first { Task { await model.importPackage(from: url) } }
+                case .failure(let error):
+                    model.errorMessage = "ファイルを選べませんでした: \(error.localizedDescription)"
                 }
             }
             .overlay {
@@ -100,6 +107,26 @@ struct DeckListView: View {
         }
     }
 
+    private var pendingSection: some View {
+        Section {
+            ForEach(model.pendingPackages, id: \.path) { url in
+                HStack {
+                    Image(systemName: "doc.zipper").foregroundStyle(Theme.gray1)
+                    Text(url.lastPathComponent).font(.footnote).lineLimit(1)
+                    Spacer()
+                }
+            }
+            Button {
+                Task { await model.importPendingPackages() }
+            } label: {
+                Label("上の \(model.pendingPackages.count) 個を取り込む", systemImage: "square.and.arrow.down")
+            }
+            .disabled(model.isImporting)
+        } header: {
+            Text("Documents に見つかったパッケージ")
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 14) {
             Spacer()
@@ -110,6 +137,18 @@ struct DeckListView: View {
             Button { showImporter = true } label: {
                 Text(".apkg を取り込む").padding(.horizontal, 20).padding(.vertical, 12)
                     .background(Theme.ink, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.paper)
+            }
+            if !model.pendingPackages.isEmpty {
+                Button {
+                    Task { await model.importPendingPackages() }
+                } label: {
+                    Text("Documents の \(model.pendingPackages.count) 個を取り込む").padding(.horizontal, 20).padding(.vertical, 12)
+                        .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.ink)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.gray3))
+                }
+            } else {
+                Text("うまくいかないときは、ファイル App でこのアプリの Documents フォルダに .apkg を置いてから画面を引き下げて更新してください。")
+                    .font(.caption2).foregroundStyle(Theme.gray2).multilineTextAlignment(.center).padding(.horizontal, 32)
             }
             Spacer()
             Text("core: anki 26.08.1 / bridge \(AnkiBackend.bridgeVersion)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 8)
@@ -208,6 +247,16 @@ struct SettingsView: View {
                     .disabled(busy)
                     if let p = model.client?.paths.root.path {
                         Text(p).font(.caption2).foregroundStyle(Theme.gray2).textSelection(.enabled)
+                    }
+                }
+                Section("取り込みの記録") {
+                    Text("ファイル App で置く場所: \(CollectionPaths.documents.path)").font(.caption2).foregroundStyle(Theme.gray2).textSelection(.enabled)
+                    if model.importLog.isEmpty {
+                        Text("まだ記録はありません").font(.caption2).foregroundStyle(Theme.gray2)
+                    } else {
+                        ForEach(Array(model.importLog.enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.caption2.monospaced()).foregroundStyle(Theme.gray1).textSelection(.enabled)
+                        }
                     }
                 }
                 Section("このアプリ") {

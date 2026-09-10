@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct KiokuApp: App {
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -10,9 +11,12 @@ struct KiokuApp: App {
                 .environment(model)
                 .tint(Theme.ink)
                 .onOpenURL { url in
-                    Task { await model.importPackage(from: url) }
+                    Task { await model.handleOpenURL(url) }
                 }
                 .task { await model.start() }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { model.scanDocuments() }
+                }
         }
     }
 }

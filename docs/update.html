@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kioku を更新</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font-family: -apple-system, "Hiragino Sans", sans-serif; background: #fff; color: #1a1a1a; }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: #ececec; } .card { background: #1b1b1b !important; border-color: #333 !important; } .sub { color: #a0a0a0 !important; } }
+  main { max-width: 520px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: #6b6b6b; font-size: 14px; margin: 0 0 24px; }
+  .card { border: 1px solid #ededed; border-radius: 14px; padding: 18px; background: #f6f6f6; margin-bottom: 16px; }
+  .ver { font-size: 15px; margin-bottom: 12px; }
+  a.btn { display: block; text-align: center; text-decoration: none; padding: 16px; border-radius: 12px; background: #1a1a1a; color: #fff; font-weight: 600; font-size: 17px; }
+  a.btn.secondary { background: transparent; color: inherit; border: 1px solid #b8b8b8; margin-top: 10px; font-weight: 400; }
+  ol { padding-left: 20px; font-size: 14px; line-height: 1.7; }
+  code { font-size: 12px; background: rgba(128,128,128,.15); padding: 1px 5px; border-radius: 4px; }
+  #err { color: #b00; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kioku を更新</h1>
+  <p class="sub">LiveContainer 版の更新ページ。ボタンを押すと LiveContainer が ipa を取得して上書きします(学習データはそのまま)。</p>
+
+  <div class="card">
+    <div class="ver" id="ver">最新版を確認中…</div>
+    <a class="btn" id="install" href="#">LiveContainer で更新</a>
+    <a class="btn secondary" id="page" href="https://github.com/k41-vibe/kioku/releases/latest">Release ページ(手動で入れる場合)</a>
+    <p id="err"></p>
+  </div>
+
+  <div class="card">
+    <ol>
+      <li><strong>Kioku を終了してから</strong>押してください(Kioku は LiveContainer の中で動くので、開いたままだと LiveContainer が受け取れません)。アプリ内の「LiveContainer で更新」から来た場合は自動で終了しています。</li>
+      <li>「LiveContainer で更新」を押す → LiveContainer が開く → 「既にあるアプリを置き換える」を選ぶ</li>
+      <li>一覧の Kioku を起動。画面下の版番号が新しくなっていれば完了</li>
+    </ol>
+  </div>
+</main>
+<script>
+(async () => {
+  const ver = document.getElementById('ver');
+  const btn = document.getElementById('install');
+  const err = document.getElementById('err');
+  const q = new URLSearchParams(location.search);
+  try {
+    const r = await fetch('https://api.github.com/repos/k41-vibe/kioku/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+    if (!r.ok) throw new Error('GitHub API ' + r.status);
+    const j = await r.json();
+    const ipa = (j.assets || []).find(a => a.name.endsWith('.ipa'));
+    if (!ipa) throw new Error('ipa が見つかりません');
+    const cur = q.get('v');
+    ver.textContent = '最新版 ' + j.tag_name + (cur ? '(今の版 ' + cur + ')' : '');
+    btn.href = 'livecontainer://install?url=' + encodeURIComponent(ipa.browser_download_url);
+    document.getElementById('page').href = j.html_url;
+  } catch (e) {
+    ver.textContent = '最新版の情報を取れませんでした';
+    err.textContent = String(e);
+    btn.href = 'https://github.com/k41-vibe/kioku/releases/latest';
+    btn.textContent = 'Release ページを開く';
+  }
+})();
+</script>
+</body>
+</html>

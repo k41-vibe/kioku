@@ -49,13 +49,21 @@ enum Updater {
         return ReleaseInfo(tag: tag, version: tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV")), ipaURL: ipaURL, pageURL: page, notes: notes)
     }
 
-    /// Ask LiveContainer to download and install the ipa. Returns false if the
-    /// scheme could not be opened (not running under LiveContainer, etc.).
+    /// Web page (GitHub Pages) with a livecontainer://install link for the latest ipa.
+    static var updatePageURL: URL {
+        URL(string: "https://k41-vibe.github.io/kioku/update.html?v=\(currentVersion)")!
+    }
+
+    /// LiveContainer ignores `livecontainer://install` while a guest app is running
+    /// (it only shows "restart to install"), and Kioku *is* the guest. So we open
+    /// the update page in Safari and then quit, so the next tap reaches a fresh
+    /// LiveContainer.
     @MainActor
-    static func installViaLiveContainer(_ info: ReleaseInfo) async -> Bool {
-        guard let encoded = info.ipaURL.absoluteString.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
-              let url = URL(string: "livecontainer://install?url=\(encoded)") else { return false }
-        return await UIApplication.shared.open(url)
+    static func openUpdatePageAndQuit() async {
+        let ok = await UIApplication.shared.open(updatePageURL)
+        guard ok else { return }
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        exit(0)
     }
 
     @MainActor

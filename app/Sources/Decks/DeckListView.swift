@@ -154,12 +154,9 @@ struct DeckListView: View {
                 }
                 HStack(spacing: 8) {
                     Button {
-                        Task {
-                            let ok = await Updater.installViaLiveContainer(update)
-                            if !ok { model.errorMessage = "LiveContainer を呼び出せませんでした。「Safari で開く」からダウンロードしてください。" }
-                        }
+                        Task { await Updater.openUpdatePageAndQuit() }
                     } label: {
-                        Text("LiveContainer で更新").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                        Text("更新ページを開く").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
                             .background(Theme.ink, in: RoundedRectangle(cornerRadius: 10)).foregroundStyle(Theme.paper)
                     }
                     .buttonStyle(.plain)
@@ -172,7 +169,7 @@ struct DeckListView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text("更新後は LiveContainer の一覧から Kioku を起動し直してください。データはそのまま残ります。")
+                Text("押すと Safari に更新ページが開き、Kioku は自動で終了します。ページの「LiveContainer で更新」を押すと LiveContainer が置き換えを行います(データはそのまま)。")
                     .font(.caption2).foregroundStyle(Theme.gray2)
             }
             .padding(.vertical, 4)

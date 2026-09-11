@@ -85,8 +85,9 @@ PC の AltServer / Sideloadly に ipa をドラッグして Apple ID で署名�
 ## アップデート
 
 起動時に GitHub の Releases を確認し、新しい版があるとデッキ一覧の上に「新しい版 vX.Y.Z があります」と出ます。
-「LiveContainer で更新」を押すと `livecontainer://install?url=…` 経由で LiveContainer が ipa を取得して上書きします(データはそのまま)。
-効かない環境では「Safari で開く」から手動でダウンロードしてください。
+「更新ページを開く」を押すと Safari で https://k41-vibe.github.io/kioku/update.html が開き、Kioku は自動で終了します。
+ページの「LiveContainer で更新」を押すと LiveContainer が ipa を取得して置き換えます(データはそのまま)。
+Kioku(=LiveContainer のプロセス)が動いたままだと LiveContainer は「restart to install」と言うだけでインストールしないので、この順番になっています。
 
 ## データの場所とバックアップ
 

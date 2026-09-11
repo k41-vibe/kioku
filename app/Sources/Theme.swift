@@ -21,8 +21,10 @@ enum Theme {
     html, body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
     body { background: #ffffff; color: #1a1a1a; font-family: -apple-system, "Hiragino Sans", "Helvetica Neue", sans-serif; }
     body.nightMode { background: #111111; color: #ececec; }
-    #qa { padding: 84px 72px 130px 20px; min-height: 60vh; word-wrap: break-word; }
-    .kioku-extra { margin-top: 28px; padding-top: 14px; border-top: 1px solid #e3e3e3; text-align: left; font-size: 15px; }
+    #qa { box-sizing: border-box; min-height: 100vh; padding: 72px 96px 120px 20px; word-wrap: break-word;
+      display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+    #qa > * { max-width: 100%; }
+    .kioku-extra { margin-top: 28px; padding-top: 14px; border-top: 1px solid #e3e3e3; text-align: center; font-size: 16px; width: 100%; }
     body.nightMode .kioku-extra { border-top-color: #333; }
     .kioku-extra-row { margin: 10px 0; }
     .kioku-extra-name { font-size: 11px; color: #8a8a8a; letter-spacing: 0.04em; margin-bottom: 2px; }

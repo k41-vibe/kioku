@@ -219,7 +219,7 @@ struct ReviewerView: View {
     /// Reels-style column on the right edge: rating buttons (answer side) or
     /// the "answer" button (question side). Bottom-aligned for the thumb.
     private var rightRail: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             Spacer()
             if page == PageID.answer.rawValue {
                 railButton(.easy, title: "簡単", symbol: "sparkles")
@@ -231,8 +231,8 @@ struct ReviewerView: View {
                     showMemoEditor = true
                 } label: {
                     VStack(spacing: 3) {
-                        Image(systemName: (session.current?.memo.isEmpty ?? true) ? "square.and.pencil" : "note.text").font(.body)
-                            .frame(width: 44, height: 44)
+                        Image(systemName: (session.current?.memo.isEmpty ?? true) ? "square.and.pencil" : "note.text").font(.title3)
+                            .frame(width: 52, height: 52)
                             .background(Theme.paper.opacity(0.92), in: Circle())
                             .overlay(Circle().stroke(Theme.gray3))
                             .foregroundStyle(Theme.ink)
@@ -246,18 +246,18 @@ struct ReviewerView: View {
                         withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
                     }
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: "eye").font(.title3)
-                            .frame(width: 52, height: 52)
+                    VStack(spacing: 5) {
+                        Image(systemName: "eye").font(.title2)
+                            .frame(width: 68, height: 68)
                             .background(Theme.ink, in: Circle())
                             .foregroundStyle(Theme.paper)
-                        Text("答え").font(.caption2).foregroundStyle(Theme.ink)
+                        Text("答え").font(.footnote.weight(.medium)).foregroundStyle(Theme.ink)
                     }
                 }
             }
-            Spacer().frame(height: 96)
+            Spacer().frame(height: 84)
         }
-        .padding(.trailing, 10)
+        .padding(.trailing, 12)
     }
 
     private func railButton(_ rating: Rating, title: String, symbol: String) -> some View {
@@ -267,14 +267,14 @@ struct ReviewerView: View {
         return Button {
             commit(rating)
         } label: {
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.body.weight(.medium))
-                    .frame(width: 52, height: 52)
-                    .background(primary ? Theme.ink : Theme.paper.opacity(0.92), in: Circle())
-                    .overlay(Circle().stroke(primary ? Theme.ink : Theme.gray2))
+            VStack(spacing: 4) {
+                Image(systemName: symbol).font(.title3.weight(.medium))
+                    .frame(width: 64, height: 64)
+                    .background(primary ? Theme.ink : Theme.paper.opacity(0.94), in: Circle())
+                    .overlay(Circle().stroke(primary ? Theme.ink : Theme.gray2, lineWidth: 1.2))
                     .foregroundStyle(primary ? Theme.paper : Theme.ink)
-                Text(title).font(.caption2).foregroundStyle(Theme.ink)
-                Text(label.isEmpty ? " " : label).font(.caption2.monospacedDigit()).foregroundStyle(Theme.gray1)
+                Text(title).font(.footnote.weight(.medium)).foregroundStyle(Theme.ink)
+                Text(label.isEmpty ? " " : label).font(.caption.monospacedDigit()).foregroundStyle(Theme.gray1)
             }
         }
     }
@@ -292,7 +292,7 @@ struct ReviewerView: View {
                 .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gray3))
                 .padding(.leading, 12)
-                .padding(.trailing, 84)
+                .padding(.trailing, 104)
                 .onTapGesture { memoDraft = memo; showMemoEditor = true }
             }
             HStack {

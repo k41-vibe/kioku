@@ -40,6 +40,16 @@ final class AppModel {
     var plans: [StudyPlan] = []
     var planStatuses: [Int64: PlanStatus] = [:]
     var today: Int = 0
+    /// Newer release on GitHub than the running build, if any.
+    var availableUpdate: ReleaseInfo?
+    var updateCheckedAt: Date?
+
+    func checkForUpdate(force: Bool = false) async {
+        if !force, let t = updateCheckedAt, Date().timeIntervalSince(t) < 3600 { return }
+        updateCheckedAt = Date()
+        guard let latest = try? await Updater.fetchLatest() else { return }
+        availableUpdate = Updater.isNewer(latest.version, than: Updater.currentVersion) ? latest : nil
+    }
     /// Recent import diagnostics, newest last (shown in settings).
     var importLog: [String] = []
     /// URLs handed to us (share sheet / open-in) before the collection was ready.
@@ -70,6 +80,7 @@ final class AppModel {
             Task.detached(priority: .background) {
                 _ = try? await client.perform { c in try c.createBackup(force: false) }
             }
+            Task { await checkForUpdate() }
             let queued = queuedOpenURLs
             queuedOpenURLs.removeAll()
             for url in queued { await importPackage(from: url) }

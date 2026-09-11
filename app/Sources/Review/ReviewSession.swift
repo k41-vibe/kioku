@@ -49,6 +49,10 @@ final class ReviewSession {
     var phase: Phase = .loading
     var current: Current?
     var next: Current?
+    /// Cards answered in this session, oldest first (capped). Scrolling back
+    /// onto the last one undoes its answer.
+    var history: [Current] = []
+    var previous: Current? { history.last }
     var counts = Counts()
     var answerRevealed = false
     var answeredCount = 0
@@ -236,6 +240,7 @@ final class ReviewSession {
             }
             answeredCount += 1
             if rating == .again { againCount += 1 }
+            pushHistory(cur)
             let text = "\(ratingName(rating))  \(label)"
             flash = text
             Task { [weak self] in
@@ -258,15 +263,23 @@ final class ReviewSession {
         }
     }
 
+    private func pushHistory(_ cur: Current) {
+        history.append(cur)
+        if history.count > 20 { history.removeFirst(history.count - 20) }
+    }
+
     func undo() async {
         guard !committing else { return }
+        committing = true
+        defer { committing = false }
         audio.stop()
-        phase = .loading
         do {
             _ = try await client.perform { c in try c.undo() }
             if answeredCount > 0 { answeredCount -= 1 }
-            await loadNext(reuse: nil)
+            let restored = history.popLast()
+            await loadNext(reuse: restored)
         } catch let e as BackendError where e.isUndoEmpty {
+            history.removeAll()
             await loadNext(reuse: nil)
         } catch {
             phase = .error("\(error)")
@@ -317,6 +330,7 @@ final class ReviewSession {
         do {
             try await client.perform { c in try op(c, cur.queued.card.id) }
             answeredCount += 1
+            pushHistory(cur)
             await loadNext(reuse: nil)
         } catch {
             phase = .error("\(error)")

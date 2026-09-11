@@ -9,14 +9,14 @@ struct ReviewerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     @State var session: ReviewSession
-    @State private var page: Int? = 0
+    @State private var page: Int? = 1
     @State private var pendingRating: Rating = .good
     @State private var showCardInfo = false
     @State private var cardStats: Anki_Stats_CardStatsResponse?
     @State private var confirmSuspend = false
     @State private var lastGeneration = 0
 
-    private enum PageID: Int { case question = 0, answer = 1, next = 2 }
+    private enum PageID: Int { case previous = 0, question = 1, answer = 2, next = 3 }
 
     var body: some View {
         ZStack {
@@ -40,6 +40,8 @@ struct ReviewerView: View {
         .onChange(of: page) { _, new in
             guard let new, session.phase == .studying else { return }
             switch PageID(rawValue: new) {
+            case .previous:
+                Task { await session.undo() }
             case .answer:
                 Task { await session.revealAnswer() }
             case .next:
@@ -92,6 +94,13 @@ struct ReviewerView: View {
         GeometryReader { geo in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 0) {
+                    if let prev = session.previous {
+                        cardPage(html: prev.questionHTML, key: "p\(prev.queued.card.id)", height: geo.size.height, isQuestion: true, interactive: false)
+                            .overlay(alignment: .bottom) {
+                                Text("下に引くと戻ります(回答を取り消し)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 110)
+                            }
+                            .id(PageID.previous.rawValue)
+                    }
                     cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: geo.size.height, isQuestion: true)
                         .id(PageID.question.rawValue)
                     cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: geo.size.height, isQuestion: false)

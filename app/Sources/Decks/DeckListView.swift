@@ -22,6 +22,7 @@ struct DeckListView: View {
             Group {
                 if let tree = model.deckTree, !tree.children.isEmpty {
                     List {
+                        if let update = model.availableUpdate { updateSection(update) }
                         if !model.pendingPackages.isEmpty { pendingSection }
                         ForEach(planStatuses, id: \.plan.deckID) { status in
                             PlanCardView(status: status) {
@@ -43,12 +44,17 @@ struct DeckListView: View {
                         .listRowBackground(Color.clear)
                     }
                     .listStyle(.plain)
-                    .refreshable { await model.refreshDecks(); model.scanDocuments() }
+                    .refreshable { await model.refreshDecks(); model.scanDocuments(); await model.checkForUpdate(force: true) }
                 } else {
                     ScrollView {
-                        emptyState.frame(minHeight: 520)
+                        VStack(spacing: 0) {
+                            if let update = model.availableUpdate {
+                                updateSection(update).padding(.horizontal, 16).padding(.top, 8)
+                            }
+                            emptyState.frame(minHeight: 520)
+                        }
                     }
-                    .refreshable { await model.refreshDecks(); model.scanDocuments() }
+                    .refreshable { await model.refreshDecks(); model.scanDocuments(); await model.checkForUpdate(force: true) }
                 }
             }
             .background(Theme.paper)
@@ -136,6 +142,41 @@ struct DeckListView: View {
                 }
             }
         }
+    }
+
+    private func updateSection(_ update: ReleaseInfo) -> some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "arrow.down.circle").foregroundStyle(Theme.ink)
+                    Text("新しい版 \(update.tag) があります(今は \(Updater.currentVersion))").font(.footnote.weight(.medium))
+                }
+                HStack(spacing: 8) {
+                    Button {
+                        Task {
+                            let ok = await Updater.installViaLiveContainer(update)
+                            if !ok { model.errorMessage = "LiveContainer を呼び出せませんでした。「Safari で開く」からダウンロードしてください。" }
+                        }
+                    } label: {
+                        Text("LiveContainer で更新").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(Theme.ink, in: RoundedRectangle(cornerRadius: 10)).foregroundStyle(Theme.paper)
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        Updater.openInSafari(update)
+                    } label: {
+                        Text("Safari で開く").font(.subheadline).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gray3)).foregroundStyle(Theme.ink)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("更新後は LiveContainer の一覧から Kioku を起動し直してください。データはそのまま残ります。")
+                    .font(.caption2).foregroundStyle(Theme.gray2)
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowBackground(Theme.paper2)
     }
 
     private var pendingSection: some View {

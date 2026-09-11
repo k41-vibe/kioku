@@ -21,8 +21,8 @@ struct PlanCardView: View {
             } else {
                 HStack(spacing: 14) {
                     if let ch = status.currentChapter {
-                        stat("今の章", shortName(ch.name))
-                        stat("章の進み", "\(ch.introduced)/\(ch.total)")
+                        stat("今の\(status.plan.unitName)", status.plan.level >= 2 ? sectionLabel(ch.name) : shortName(ch.name))
+                        stat("\(status.plan.unitName)の進み", "\(ch.introduced)/\(ch.total)")
                     }
                     stat("今日の新規", "\(status.todayNew)")
                     stat("全体", "\(status.introduced)/\(status.totalInScope)")
@@ -39,7 +39,7 @@ struct PlanCardView: View {
                 .buttonStyle(.plain)
                 if let ch = status.currentChapter {
                     Button { onDrill(ch) } label: {
-                        Text("今の章を周回").font(.subheadline).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        Text("今の\(status.plan.unitName)を周回").font(.subheadline).frame(maxWidth: .infinity).padding(.vertical, 10)
                             .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 10))
                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gray3)).foregroundStyle(Theme.ink)
                     }
@@ -50,6 +50,12 @@ struct PlanCardView: View {
         .padding(14)
         .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.gray3))
+    }
+
+    /// "Deck::01::3" -> "01·3"
+    private func sectionLabel(_ full: String) -> String {
+        let parts = full.components(separatedBy: "::")
+        return parts.suffix(2).joined(separator: "·")
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
@@ -67,7 +73,9 @@ struct PlanSetupView: View {
     let deckID: Int64
     let deckName: String
     let hasChapters: Bool
+    let hasSections: Bool
 
+    @State private var level: Int = 1
     @State private var unit: StudyPlan.Unit = .chapters
     @State private var amountText: String = "1"
     @State private var periodChoice: Int = 7
@@ -77,8 +85,9 @@ struct PlanSetupView: View {
     @State private var loaded = false
 
     private var chapterList: [PlanChapter] {
-        model.node(for: deckID).map { PlanEngine.chapters(from: $0) } ?? []
+        model.node(for: deckID).map { PlanEngine.chapters(from: $0, level: level) } ?? []
     }
+    private var unitName: String { level >= 2 ? "節" : "章" }
 
     private var periodDays: Int { periodChoice == 0 ? customDays : periodChoice }
     private var amount: Double { Double(amountText.replacingOccurrences(of: ",", with: ".")) ?? 0 }
@@ -89,10 +98,17 @@ struct PlanSetupView: View {
             Form {
                 Section("単位") {
                     Picker("単位", selection: $unit) {
-                        Text("章").tag(StudyPlan.Unit.chapters)
+                        Text(unitName).tag(StudyPlan.Unit.chapters)
                         Text("単語数").tag(StudyPlan.Unit.words)
                     }
                     .pickerStyle(.segmented)
+                    if hasSections {
+                        Picker("数える階層", selection: $level) {
+                            Text("章(デッキ直下)").tag(1)
+                            Text("節(章の下)").tag(2)
+                        }
+                        .onChange(of: level) { _, _ in startChapter = 0 }
+                    }
                     if unit == .chapters && !hasChapters {
                         Text("このデッキには章(サブデッキ)がありません。先にデッキ画面の「章に分ける」で分けてください。")
                             .font(.caption).foregroundStyle(Theme.gray1)
@@ -100,9 +116,9 @@ struct PlanSetupView: View {
                 }
                 Section("ペース") {
                     HStack {
-                        TextField(unit == .chapters ? "章の数(小数可)" : "単語数", text: $amountText)
+                        TextField(unit == .chapters ? "\(unitName)の数(小数可)" : "単語数", text: $amountText)
                             .keyboardType(.decimalPad)
-                        Text(unit == .chapters ? "章" : "語").foregroundStyle(Theme.gray1)
+                        Text(unit == .chapters ? unitName : "語").foregroundStyle(Theme.gray1)
                         Text("/").foregroundStyle(Theme.gray2)
                         Picker("", selection: $periodChoice) {
                             Text("日").tag(1)
@@ -116,9 +132,9 @@ struct PlanSetupView: View {
                     }
                     DatePicker("開始日", selection: $startDate, displayedComponents: .date)
                     if hasChapters {
-                        Picker("開始する章", selection: $startChapter) {
+                        Picker("開始する\(unitName)", selection: $startChapter) {
                             ForEach(Array(chapterList.enumerated()), id: \.offset) { i, ch in
-                                Text("\(shortName(ch.name))  (\(ch.introduced)/\(ch.total))").tag(i)
+                                Text("\(level >= 2 ? ch.name.components(separatedBy: "::").suffix(2).joined(separator: "·") : shortName(ch.name))  (\(ch.introduced)/\(ch.total))").tag(i)
                             }
                         }
                     }
@@ -157,7 +173,7 @@ struct PlanSetupView: View {
             let avg = scope.isEmpty ? 0 : total / scope.count
             let perDay = Double(avg) * amount / Double(periodDays)
             let weeks = amount > 0 ? Double(scope.count) / amount * Double(periodDays) / 7 : 0
-            return String(format: "%d 章 × 平均 %d 枚。1日あたり約 %.0f 枚、全部で約 %.0f 週間。", scope.count, avg, perDay.rounded(.up), weeks)
+            return String(format: "%d \(unitName) × 平均 %d 枚。1日あたり約 %.0f 枚、全部で約 %.0f 週間。", scope.count, avg, perDay.rounded(.up), weeks)
         case .words:
             let perDay = amount / Double(periodDays)
             let days = perDay > 0 ? Double(total) / perDay : 0
@@ -174,6 +190,7 @@ struct PlanSetupView: View {
             periodChoice = [1, 7].contains(p.periodDays) ? p.periodDays : 0
             customDays = p.periodDays
             startDate = Calendar.current.date(byAdding: .day, value: p.startDay - model.today, to: Date()) ?? Date()
+            level = p.level
             startChapter = p.startChapterIndex
         } else if !hasChapters {
             unit = .words
@@ -185,7 +202,7 @@ struct PlanSetupView: View {
     private func save() async {
         let offset = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: startDate)).day ?? 0
         let plan = StudyPlan(deckID: deckID, unit: unit, amountPerPeriod: amount, periodDays: periodDays,
-                             startDay: model.today + offset, startChapterIndex: hasChapters ? startChapter : 0, previousNewLimit: nil)
+                             startDay: model.today + offset, startChapterIndex: hasChapters ? startChapter : 0, level: level, previousNewLimit: nil)
         await model.setPlan(plan)
         dismiss()
     }

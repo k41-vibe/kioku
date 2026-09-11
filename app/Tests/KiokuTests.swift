@@ -257,6 +257,37 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertEqual(s.currentChapterIndex, 1)
     }
 
+    func testPlanLevelTwoUsesSectionsAndDecodesOldJSON() throws {
+        // tree: D -> 01 -> {01,02}, 02 -> {01}
+        func node(_ id: Int64, _ name: String, _ total: UInt32, _ newc: UInt32, _ kids: [DeckTreeNode] = []) -> DeckTreeNode {
+            var n = DeckTreeNode(); n.deckID = id; n.name = name; n.children = kids
+            n.newUncapped = kids.isEmpty ? newc : 0
+            n.totalIncludingChildren = kids.isEmpty ? total : kids.reduce(0) { $0 + $1.totalIncludingChildren }
+            return n
+        }
+        let tree = node(1, "D", 0, 0, [
+            node(10, "D::01", 0, 0, [node(101, "D::01::01", 5, 5), node(102, "D::01::02", 5, 5)]),
+            node(20, "D::02", 0, 0, [node(201, "D::02::01", 4, 4)]),
+        ])
+        XCTAssertEqual(PlanEngine.chapters(from: tree, level: 1).map { $0.deckID }, [10, 20])
+        XCTAssertEqual(PlanEngine.chapters(from: tree, level: 2).map { $0.deckID }, [101, 102, 201])
+        XCTAssertTrue(PlanEngine.hasLevel(tree, 2))
+        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 1, startDay: 0, startChapterIndex: 1, level: 2)
+        let s = PlanEngine.status(plan: plan, today: 0, chapters: PlanEngine.chapters(from: tree, level: 2), deckTotal: 14, deckNewRemaining: 14)
+        XCTAssertEqual(s.chapterLimits[101], 0)
+        XCTAssertEqual(s.chapterLimits[102], PlanEngine.unlimited)
+        XCTAssertEqual(s.chapterLimits[201], 0)
+        XCTAssertEqual(s.totalInScope, 9)
+        XCTAssertEqual(s.todayNew, 5)
+        XCTAssertEqual(plan.label, "1節/日")
+        // JSON written by an older build (no level / startChapterIndex) must still decode.
+        let old = #"[{"deckID":1,"unit":"chapters","amountPerPeriod":1,"periodDays":7,"startDay":3}]"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode([StudyPlan].self, from: old)
+        XCTAssertEqual(decoded.first?.level, 1)
+        XCTAssertEqual(decoded.first?.startChapterIndex, 0)
+        XCTAssertNil(decoded.first?.previousNewLimit)
+    }
+
     func testPlanWordsPerDayCatchesUp() {
         let plan = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 30, periodDays: 1, startDay: 5)
         let s0 = PlanEngine.status(plan: plan, today: 5, chapters: [], deckTotal: 100, deckNewRemaining: 100)

@@ -21,8 +21,40 @@ struct StudyPlan: Codable, Identifiable, Equatable {
     /// Index (0-based, study order) of the first chapter in scope. Chapters
     /// before it are left alone and never introduce new cards.
     var startChapterIndex: Int = 0
+    /// Which subdeck level counts as a unit: 1 = 章 (direct children), 2 = 節 (grandchildren).
+    var level: Int = 1
     /// Original per-deck new limit before the plan took over (nil = preset).
     var previousNewLimit: UInt32?
+
+    var unitName: String { level >= 2 ? "節" : "章" }
+
+    init(deckID: Int64, unit: Unit, amountPerPeriod: Double, periodDays: Int, startDay: Int,
+         startChapterIndex: Int = 0, level: Int = 1, previousNewLimit: UInt32? = nil) {
+        self.deckID = deckID
+        self.unit = unit
+        self.amountPerPeriod = amountPerPeriod
+        self.periodDays = periodDays
+        self.startDay = startDay
+        self.startChapterIndex = startChapterIndex
+        self.level = level
+        self.previousNewLimit = previousNewLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deckID, unit, amountPerPeriod, periodDays, startDay, startChapterIndex, level, previousNewLimit
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deckID = try c.decode(Int64.self, forKey: .deckID)
+        unit = try c.decode(Unit.self, forKey: .unit)
+        amountPerPeriod = try c.decode(Double.self, forKey: .amountPerPeriod)
+        periodDays = try c.decode(Int.self, forKey: .periodDays)
+        startDay = try c.decode(Int.self, forKey: .startDay)
+        startChapterIndex = try c.decodeIfPresent(Int.self, forKey: .startChapterIndex) ?? 0
+        level = try c.decodeIfPresent(Int.self, forKey: .level) ?? 1
+        previousNewLimit = try c.decodeIfPresent(UInt32.self, forKey: .previousNewLimit)
+    }
 
     var perDay: Double { amountPerPeriod / Double(max(periodDays, 1)) }
 
@@ -36,7 +68,7 @@ struct StudyPlan: Codable, Identifiable, Equatable {
         switch unit {
         case .chapters:
             let a = amountPerPeriod == amountPerPeriod.rounded() ? String(Int(amountPerPeriod)) : String(format: "%.1f", amountPerPeriod)
-            return "\(a)章/\(period)"
+            return "\(a)\(unitName)/\(period)"
         case .words:
             return "\(Int(amountPerPeriod))語/\(period)"
         }
@@ -130,11 +162,20 @@ enum PlanEngine {
         }
     }
 
-    /// Chapters = direct children of the deck node, in tree (name) order.
-    static func chapters(from node: DeckTreeNode) -> [PlanChapter] {
-        node.children.filter { !$0.filtered }.map { c in
-            PlanChapter(deckID: c.deckID, name: c.name, total: Int(c.totalIncludingChildren), newRemaining: Int(newRemaining(in: c)))
+    /// Units at `level` below the deck node (1 = children, 2 = grandchildren), flattened in tree order.
+    static func chapters(from node: DeckTreeNode, level: Int = 1) -> [PlanChapter] {
+        let kids = node.children.filter { !$0.filtered }
+        if level <= 1 {
+            return kids.map { c in
+                PlanChapter(deckID: c.deckID, name: c.name, total: Int(c.totalIncludingChildren), newRemaining: Int(newRemaining(in: c)))
+            }
         }
+        return kids.flatMap { chapters(from: $0, level: level - 1) }
+    }
+
+    /// Does the deck have subdecks at the given depth?
+    static func hasLevel(_ node: DeckTreeNode, _ level: Int) -> Bool {
+        !chapters(from: node, level: level).isEmpty
     }
 
     static func newRemaining(in node: DeckTreeNode) -> UInt32 {
@@ -161,10 +202,14 @@ extension AnkiClient {
     @discardableResult
     func applyPlan(_ plan: StudyPlan, tree: DeckTreeNode, today: Int) throws -> PlanStatus? {
         guard let node = Self.find(plan.deckID, in: tree) else { return nil }
-        let chapters = PlanEngine.chapters(from: node)
+        let chapters = PlanEngine.chapters(from: node, level: plan.level)
         let status = PlanEngine.status(plan: plan, today: today, chapters: chapters,
                                        deckTotal: Int(node.totalIncludingChildren), deckNewRemaining: Int(PlanEngine.newRemaining(in: node)))
         try setNewLimit(deckID: plan.deckID, limit: UInt32(status.todayNew))
+        if plan.level >= 2 {
+            // Intermediate chapters must not cap their sections.
+            for c in node.children where !c.filtered { try setNewLimit(deckID: c.deckID, limit: PlanEngine.unlimited) }
+        }
         for (did, limit) in status.chapterLimits {
             try setNewLimit(deckID: did, limit: limit)
         }
@@ -177,6 +222,7 @@ extension AnkiClient {
         if let node = Self.find(plan.deckID, in: tree) {
             for c in node.children where !c.filtered {
                 try setNewLimit(deckID: c.deckID, limit: nil)
+                for g in c.children where !g.filtered { try setNewLimit(deckID: g.deckID, limit: nil) }
             }
         }
     }

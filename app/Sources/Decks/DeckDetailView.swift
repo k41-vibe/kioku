@@ -52,7 +52,7 @@ struct DeckDetailView: View {
                 Section("ペース") {
                     if let status = model.planStatuses[deckID] {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(status.plan.label + (status.currentChapter.map { " · 今は \(shortName($0.name))" } ?? ""))
+                            Text(status.plan.label + (status.currentChapter.map { " · 今は \($0.name.components(separatedBy: "::").dropFirst().joined(separator: "·"))" } ?? ""))
                                 .font(.footnote)
                             Text("今日の新規 \(status.todayNew) 枚 · 導入 \(status.introduced)/\(status.totalInScope)")
                                 .font(.caption).foregroundStyle(Theme.gray1)
@@ -86,8 +86,10 @@ struct DeckDetailView: View {
                     .disabled(busy)
                 }
                 Section("整理") {
-                    if node.children.isEmpty && !node.filtered {
-                        Button { showSplit = true } label: { Label("章に分ける", systemImage: "square.split.2x1") }
+                    if !node.filtered {
+                        Button { showSplit = true } label: {
+                            Label(node.children.isEmpty ? "章に分ける" : "各章を節に分ける", systemImage: "square.split.2x1")
+                        }
                     }
                     Button {
                         busy = true
@@ -139,7 +141,9 @@ struct DeckDetailView: View {
             Text("復習の予定と間隔が消え、最初から出題されます。取り消しはデッキ一覧の履歴メニューからできます。")
         }
         .sheet(isPresented: $showPlan) {
-            PlanSetupView(deckID: deckID, deckName: name, hasChapters: !(node?.children.filter { !$0.filtered }.isEmpty ?? true))
+            PlanSetupView(deckID: deckID, deckName: name,
+                          hasChapters: node.map { PlanEngine.hasLevel($0, 1) } ?? false,
+                          hasSections: node.map { PlanEngine.hasLevel($0, 2) } ?? false)
         }
     }
 
@@ -244,29 +248,44 @@ struct ChapterSplitView: View {
     @State private var busy = false
     @State private var error: String?
 
+    /// Existing chapters (direct subdecks). When present we split each of them into sections.
+    private var existingChapters: [DeckTreeNode] {
+        model.node(for: deckID)?.children.filter { !$0.filtered } ?? []
+    }
+    private var sectionMode: Bool { !existingChapters.isEmpty }
+
     var chapters: Int { total == 0 ? 0 : (total + perChapter - 1) / perChapter }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper("1章あたり \(perChapter) 枚", value: $perChapter, in: 20...500, step: 10)
-                    Text("全 \(total) 枚 → \(chapters) 章(\(shortName(deckName))::01 …)").font(.footnote).foregroundStyle(Theme.gray1)
+                    if sectionMode {
+                        Stepper("1節あたり \(perChapter) 枚", value: $perChapter, in: 5...200, step: 5)
+                        let avg = existingChapters.isEmpty ? 0 : Int(existingChapters.reduce(0) { $0 + Int($1.totalIncludingChildren) }) / existingChapters.count
+                        Text("\(existingChapters.count) 章(平均 \(avg) 枚)→ 各章を約 \(max((avg + perChapter - 1) / max(perChapter, 1), 1)) 節に(\(shortName(deckName))::01::01 …)").font(.footnote).foregroundStyle(Theme.gray1)
+                    } else {
+                        Stepper("1章あたり \(perChapter) 枚", value: $perChapter, in: 20...500, step: 10)
+                        Text("全 \(total) 枚 → \(chapters) 章(\(shortName(deckName))::01 …)").font(.footnote).foregroundStyle(Theme.gray1)
+                    }
                 }
                 Section {
-                    Text("ノートの追加順(単語帳の並び)で区切ります。同じノートのカードは同じ章に入ります。元に戻すには章デッキを親デッキ名に改名して統合してください。")
+                    Text(sectionMode
+                         ? "各章の中を、ノートの追加順で節に区切ります。すでに節がある章はそのままです。"
+                         : "ノートの追加順(単語帳の並び)で区切ります。同じノートのカードは同じ章に入ります。元に戻すには章デッキを親デッキ名に改名して統合してください。")
                         .font(.caption2).foregroundStyle(Theme.gray2)
                 }
                 if let error { Text(error).font(.footnote).foregroundStyle(Theme.gray1) }
             }
-            .navigationTitle("章に分ける")
+            .navigationTitle(sectionMode ? "節に分ける" : "章に分ける")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("実行") { Task { await split() } }.disabled(busy || total == 0) }
+                ToolbarItem(placement: .confirmationAction) { Button("実行") { Task { await split() } }.disabled(busy || (total == 0 && !sectionMode)) }
             }
             .task {
                 let name = deckName
+                if sectionMode { perChapter = 20 }
                 total = (try? await model.client?.perform { c in try c.searchCards("deck:\"\(name)\"", orderSQL: "n.id asc, c.ord asc").count }) ?? 0
             }
         }
@@ -276,21 +295,26 @@ struct ChapterSplitView: View {
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
-        let name = deckName
         let size = perChapter
+        // Targets: the deck itself (chapter mode) or each chapter without sections (section mode).
+        let targets: [(name: String, pad: Int)] = sectionMode
+            ? existingChapters.filter { $0.children.isEmpty }.map { ($0.name, 2) }
+            : [(deckName, 2)]
         do {
             try await client.perform { c in
-                let ids = try c.searchCards("deck:\"\(name)\"", orderSQL: "n.id asc, c.ord asc")
-                var chapter = 1
-                var index = 0
-                while index < ids.count {
-                    let end = min(index + size, ids.count)
-                    let chapterName = name + "::" + String(format: "%02d", chapter)
-                    let did: Int64
-                    if let existing = try c.deckID(named: chapterName) { did = existing } else { did = try c.addDeck(named: chapterName) }
-                    _ = try c.setDeck(cardIDs: Array(ids[index..<end]), deckID: did)
-                    chapter += 1
-                    index = end
+                for target in targets {
+                    let ids = try c.searchCards("deck:\"\(target.name)\"", orderSQL: "n.id asc, c.ord asc")
+                    var part = 1
+                    var index = 0
+                    while index < ids.count {
+                        let end = min(index + size, ids.count)
+                        let partName = target.name + "::" + String(format: "%0\(target.pad)d", part)
+                        let did: Int64
+                        if let existing = try c.deckID(named: partName) { did = existing } else { did = try c.addDeck(named: partName) }
+                        _ = try c.setDeck(cardIDs: Array(ids[index..<end]), deckID: did)
+                        part += 1
+                        index = end
+                    }
                 }
             }
             await model.refreshDecks()

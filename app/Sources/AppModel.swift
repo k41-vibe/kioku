@@ -33,6 +33,7 @@ final class AppModel {
     var importSummary: ImportSummary?
     var isImporting = false
     var undoLabel: String = ""
+    var redoLabel: String = ""
     /// .apkg files found in Documents (dropped there via the Files app).
     var pendingPackages: [URL] = []
     /// Recent import diagnostics, newest last (shown in settings).
@@ -112,6 +113,7 @@ final class AppModel {
             deckTree = tree
             deckNames = Dictionary(uniqueKeysWithValues: names.map { ($0.id, $0.name) })
             undoLabel = undo.undo
+            redoLabel = undo.redo
         } catch {
             errorMessage = "\(error)"
         }
@@ -124,6 +126,18 @@ final class AppModel {
             await refreshDecks()
         } catch let e as BackendError where e.isUndoEmpty {
             undoLabel = ""
+        } catch {
+            errorMessage = "\(error)"
+        }
+    }
+
+    func redo() async {
+        guard let client else { return }
+        do {
+            _ = try await client.perform { c in try c.redo() }
+            await refreshDecks()
+        } catch let e as BackendError where e.isUndoEmpty {
+            redoLabel = ""
         } catch {
             errorMessage = "\(error)"
         }

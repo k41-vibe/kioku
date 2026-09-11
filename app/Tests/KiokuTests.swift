@@ -92,6 +92,28 @@ final class KiokuCoreTests: XCTestCase {
         let restored = try client.queuedCards(limit: 1)
         XCTAssertEqual(restored.newCount, 5)
         XCTAssertEqual(restored.learningCount, 0)
+        XCTAssertFalse(try client.undoStatus().redo.isEmpty)
+        try client.redo()
+        let redone = try client.queuedCards(limit: 1)
+        XCTAssertEqual(redone.newCount, 4)
+        XCTAssertEqual(redone.learningCount, 1)
+    }
+
+    func testImportIsUndoableAndRedoable() throws {
+        let (did, _) = try addBasicNotes(deck: "元", count: 2, prefix: "u")
+        let out = client.paths.inbox.appendingPathComponent("u.apkg").path
+        _ = try client.exportAnkiPackage(deckID: did, to: out, withScheduling: false, withMedia: false)
+        let paths2 = try CollectionPaths.temporary()
+        let c2 = AnkiClient(backend: try AnkiBackend(), paths: paths2)
+        try c2.openCollection()
+        defer { try? c2.closeCollection(); try? FileManager.default.removeItem(at: paths2.root) }
+        _ = try c2.importAnkiPackage(at: out)
+        XCTAssertTrue(try c2.deckTree().children.contains { $0.name == "元" })
+        XCTAssertFalse(try c2.undoStatus().undo.isEmpty)
+        try c2.undo()
+        XCTAssertFalse(try c2.deckTree().children.contains { $0.name == "元" })
+        try c2.redo()
+        XCTAssertTrue(try c2.deckTree().children.contains { $0.name == "元" && $0.totalInDeck == 2 })
     }
 
     func testTypeAnswerHelpers() throws {

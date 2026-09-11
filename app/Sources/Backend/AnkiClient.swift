@@ -68,6 +68,11 @@ final class AnkiClient: @unchecked Sendable {
         try backend.invoke(AnkiRPC.Collection.service, AnkiRPC.Collection.undo)
     }
 
+    @discardableResult
+    func redo() throws -> Anki_Collection_OpChangesAfterUndo {
+        try backend.invoke(AnkiRPC.Collection.service, AnkiRPC.Collection.redo)
+    }
+
     // MARK: - Scheduler
 
     func timingToday() throws -> Anki_Scheduler_SchedTimingTodayResponse {

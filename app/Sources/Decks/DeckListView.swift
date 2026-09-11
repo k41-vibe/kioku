@@ -10,6 +10,7 @@ struct DeckListView: View {
     @State private var renaming: DeckTreeNode?
     @State private var renameText = ""
     @State private var deleting: DeckTreeNode?
+    @State private var confirmUndo = false
 
     var body: some View {
         NavigationStack {
@@ -43,8 +44,15 @@ struct DeckListView: View {
                     Button { showStats = true } label: { Image(systemName: "chart.bar") }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if !model.undoLabel.isEmpty {
-                        Button { Task { await model.undo() } } label: { Image(systemName: "arrow.uturn.backward") }
+                    if !model.undoLabel.isEmpty || !model.redoLabel.isEmpty {
+                        Menu {
+                            if !model.undoLabel.isEmpty {
+                                Button { confirmUndo = true } label: { Label("取り消す: \(model.undoLabel)", systemImage: "arrow.uturn.backward") }
+                            }
+                            if !model.redoLabel.isEmpty {
+                                Button { Task { await model.redo() } } label: { Label("やり直す: \(model.redoLabel)", systemImage: "arrow.uturn.forward") }
+                            }
+                        } label: { Image(systemName: "clock.arrow.circlepath") }
                     }
                     Button { showImporter = true } label: { Image(systemName: "square.and.arrow.down") }
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -97,6 +105,11 @@ struct DeckListView: View {
                     renaming = nil
                 }
                 Button("キャンセル", role: .cancel) { renaming = nil }
+            }
+            .confirmationDialog("「\(model.undoLabel)」を取り消しますか?", isPresented: $confirmUndo, titleVisibility: .visible) {
+                Button("取り消す", role: .destructive) { Task { await model.undo() } }
+            } message: {
+                Text("取り込みを取り消すとそのデッキは消えます。「やり直す」で戻せます。")
             }
             .confirmationDialog("「\(deleting.map { shortName($0.name) } ?? "")」を削除しますか?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                 Button("削除(カードも消えます)", role: .destructive) {

@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFoundation
 
 /// Home screen: hierarchical deck list with the day's counts, import button.
 struct DeckListView: View {
@@ -287,8 +288,11 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var mono = true
+    @State private var extras = true
     @State private var checkResult: String?
     @State private var busy = false
+    @State private var audioTester = CardAudioPlayer(mediaFolder: CollectionPaths.documents)
+    @State private var audioResult: String = ""
 
     var body: some View {
         NavigationStack {
@@ -296,6 +300,16 @@ struct SettingsView: View {
                 Section("見た目") {
                     Toggle("アプリの見た目を優先(デッキの色指定を無視)", isOn: $mono)
                         .onChange(of: mono) { _, v in model.forceMonochrome = v }
+                    Toggle("テンプレートに無いフィールドも答えの下に表示", isOn: $extras)
+                        .onChange(of: extras) { _, v in UserDefaults.standard.set(v, forKey: "showExtraFields") }
+                }
+                Section("音声テスト") {
+                    Button {
+                        runAudioTest()
+                    } label: { Label("media の音声を 1 つ再生してみる", systemImage: "speaker.wave.2") }
+                    if !audioResult.isEmpty {
+                        Text(audioResult).font(.caption2.monospaced()).foregroundStyle(Theme.gray1).textSelection(.enabled)
+                    }
                 }
                 Section("メンテナンス") {
                     Button {
@@ -340,10 +354,38 @@ struct SettingsView: View {
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("閉じる") { dismiss() } } }
-            .onAppear { mono = model.forceMonochrome }
+            .onAppear {
+                mono = model.forceMonochrome
+                extras = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
+            }
             .alert("結果", isPresented: Binding(get: { checkResult != nil }, set: { if !$0 { checkResult = nil } })) {
                 Button("OK") { checkResult = nil }
             } message: { Text(checkResult ?? "") }
         }
+    }
+
+    private func runAudioTest() {
+        guard let media = model.client?.paths.media else { audioResult = "コレクションが開いていません"; return }
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(atPath: media.path)) ?? []
+        let audio = files.filter { ["mp3", "m4a", "wav", "ogg", "aac", "flac", "opus"].contains(($0 as NSString).pathExtension.lowercased()) }
+        var lines: [String] = []
+        lines.append("media: \(media.path)")
+        lines.append("ファイル数: \(files.count)(音声らしきもの \(audio.count))")
+        let session = AVAudioSession.sharedInstance()
+        lines.append("session category: \(session.category.rawValue), other audio: \(session.isOtherAudioPlaying), volume: \(session.outputVolume)")
+        guard let first = audio.first else {
+            audioResult = (lines + ["再生できる音声ファイルがありません。デッキの取り込みで media が入っていない可能性があります。"]).joined(separator: "\n")
+            return
+        }
+        let tester = CardAudioPlayer(mediaFolder: media)
+        audioTester = tester
+        tester.onError = { msg in
+            DispatchQueue.main.async { audioResult = (lines + ["再生: \(first)", "エラー: \(msg)"]).joined(separator: "\n") }
+        }
+        var tag = Anki_CardRendering_AVTag()
+        tag.soundOrVideo = first
+        tester.play(single: tag)
+        audioResult = (lines + ["再生中: \(first)(音が出なければ、上のエラー欄か消音スイッチを確認)"]).joined(separator: "\n")
     }
 }

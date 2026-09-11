@@ -2,6 +2,20 @@ import Foundation
 import Observation
 import SwiftUI
 
+/// Notetype lookups cached for a session (thread-safe; used from the backend queue).
+final class NotetypeCache: @unchecked Sendable {
+    private var map: [Int64: Anki_Notetypes_Notetype] = [:]
+    private let lock = NSLock()
+    func get(_ id: Int64, _ c: AnkiClient) throws -> Anki_Notetypes_Notetype {
+        lock.lock(); defer { lock.unlock() }
+        if let nt = map[id] { return nt }
+        let nt = try c.notetype(id)
+        map[id] = nt
+        return nt
+    }
+    func invalidate(_ id: Int64) { lock.lock(); map[id] = nil; lock.unlock() }
+}
+
 /// One study session: normal review of a deck, or a preview-mode drill that
 /// never touches the real schedule. The view shows a vertical reel:
 /// page 0 = question, page 1 = answer, page 2 = next card's question.
@@ -37,7 +51,13 @@ final class ReviewSession {
         var shownAt: Date
         var questionHTML: String = ""
         var answerHTML: String = ""
+        var memo: String = ""
+        var note: Anki_Notes_Note? = nil
+        var memoFieldIndex: Int? = nil
     }
+
+    let notetypes = NotetypeCache()
+    var showExtraFields: Bool = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
 
     let client: AnkiClient
     let deckID: Int64
@@ -116,7 +136,7 @@ final class ReviewSession {
 
     // MARK: - Queue (runs on the backend queue)
 
-    nonisolated private static func fetch(_ c: AnkiClient, reuse: Current?) throws -> (Current?, Current?, Counts) {
+    nonisolated private static func fetch(_ c: AnkiClient, reuse: Current?, cache: NotetypeCache, extras: Bool) throws -> (Current?, Current?, Counts) {
         let queued = try c.queuedCards(limit: 2)
         let counts = Counts(new: queued.newCount, learning: queued.learningCount, review: queued.reviewCount)
         guard let first = queued.cards.first else { return (nil, nil, counts) }
@@ -124,19 +144,23 @@ final class ReviewSession {
         if let reuse, reuse.queued.card.id == first.card.id {
             cur = reuse
         } else {
-            cur = try build(first, c)
+            cur = try build(first, c, cache: cache, extras: extras)
         }
         var nxt: Current? = nil
         if queued.cards.count > 1 {
-            nxt = try build(queued.cards[1], c)
+            nxt = try build(queued.cards[1], c, cache: cache, extras: extras)
         }
         return (cur, nxt, counts)
     }
 
-    nonisolated private static func build(_ q: QueuedCard, _ c: AnkiClient) throws -> Current {
+    nonisolated private static func build(_ q: QueuedCard, _ c: AnkiClient, cache: NotetypeCache, extras: Bool) throws -> Current {
         let rendered = try c.renderCard(q.card.id)
         var qhtml = CardHTML.join(rendered.questionNodes)
         var ahtml = CardHTML.join(rendered.answerNodes)
+
+        let note = try c.note(q.card.noteID)
+        let nt = try cache.get(note.notetypeID, c)
+        let names = nt.fields.map { $0.name }
 
         var typeExpected: String?
         var typeField: String?
@@ -144,8 +168,6 @@ final class ReviewSession {
         if let t = CardHTML.typeAnswerField(in: qhtml) {
             typeField = t.field
             typeCloze = t.cloze
-            let note = try c.note(q.card.noteID)
-            let names = try c.fieldNames(notetypeID: note.notetypeID)
             if let idx = names.firstIndex(of: t.field), idx < note.fields.count {
                 var expected = note.fields[idx]
                 if t.cloze {
@@ -155,6 +177,22 @@ final class ReviewSession {
             }
         }
         qhtml = CardHTML.injectTypeInput(qhtml, hasField: typeExpected != nil)
+
+        // Memo field (native UI) and fields the template never shows (appended to the answer).
+        let memoIdx = names.firstIndex(of: CardHTML.memoFieldName)
+        let memo = memoIdx.flatMap { $0 < note.fields.count ? note.fields[$0] : nil } ?? ""
+        if extras {
+            let templates = nt.templates.flatMap { [$0.config.qFormat, $0.config.aFormat] }
+            let used = CardHTML.referencedFields(in: templates)
+            var pairs: [(String, String)] = []
+            for (i, name) in names.enumerated() where i < note.fields.count {
+                if name == CardHTML.memoFieldName || used.contains(name) { continue }
+                let v = note.fields[i]
+                if v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+                pairs.append((name, v))
+            }
+            ahtml += CardHTML.extraFieldsHTML(pairs)
+        }
 
         let qav = try c.extractAVTags(qhtml, questionSide: true)
         let aav = try c.extractAVTags(ahtml, questionSide: false)
@@ -169,8 +207,37 @@ final class ReviewSession {
             css: rendered.css,
             labels: labels.count == 4 ? labels : ["", "", "", ""],
             typeExpected: typeExpected,
-            shownAt: Date()
+            shownAt: Date(),
+            memo: memo,
+            note: note,
+            memoFieldIndex: memoIdx
         )
+    }
+
+    /// Save a memo into the note field named メモ, creating the field if needed.
+    func saveMemo(_ text: String) async {
+        guard var cur = current, let note = cur.note else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == cur.memo { return }
+        let ntid = note.notetypeID
+        let noteID = note.id
+        do {
+            let (idx, saved) = try await client.perform { [notetypes] c -> (Int, Anki_Notes_Note) in
+                let idx = try c.ensureField(named: CardHTML.memoFieldName, notetypeID: ntid)
+                notetypes.invalidate(ntid)
+                var n = try c.note(noteID)
+                while n.fields.count <= idx { n.fields.append("") }
+                n.fields[idx] = trimmed.replacingOccurrences(of: "\n", with: "<br>")
+                try c.updateNote(n)
+                return (idx, n)
+            }
+            cur.memo = trimmed
+            cur.note = saved
+            cur.memoFieldIndex = idx
+            current = cur
+        } catch {
+            errorMessage = "メモを保存できませんでした: \(error)"
+        }
     }
 
     private func render(_ cur: inout Current, comparison: String? = nil) {
@@ -187,7 +254,7 @@ final class ReviewSession {
                 let timing = try await client.perform { c in try c.timingToday() }
                 nextDayAt = Date(timeIntervalSince1970: TimeInterval(timing.nextDayAt))
             }
-            let (cur, nxt, counts) = try await client.perform { c in try Self.fetch(c, reuse: reuse) }
+            let (cur, nxt, counts) = try await client.perform { [notetypes, showExtraFields] c in try Self.fetch(c, reuse: reuse, cache: notetypes, extras: showExtraFields) }
             self.counts = counts
             guard var cur else {
                 await finish()

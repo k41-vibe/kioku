@@ -302,6 +302,39 @@ final class AnkiClient: @unchecked Sendable {
         return r.vals
     }
 
+    func notetype(_ id: Int64) throws -> Anki_Notetypes_Notetype {
+        var req = Anki_Notetypes_NotetypeId()
+        req.ntid = id
+        return try backend.invoke(AnkiRPC.Notetypes.service, AnkiRPC.Notetypes.getNotetype, req)
+    }
+
+    func updateNotetype(_ nt: Anki_Notetypes_Notetype) throws {
+        try backend.invokeVoid(AnkiRPC.Notetypes.service, AnkiRPC.Notetypes.updateNotetype, nt)
+    }
+
+    func updateNote(_ note: Anki_Notes_Note) throws {
+        var req = Anki_Notes_UpdateNotesRequest()
+        req.notes = [note]
+        req.skipUndoEntry = false
+        try backend.invokeVoid(AnkiRPC.Notes.service, AnkiRPC.Notes.updateNotes, req)
+    }
+
+    /// Ensure the notetype has a field named `name`; returns its index.
+    func ensureField(named name: String, notetypeID: Int64) throws -> Int {
+        var nt = try notetype(notetypeID)
+        if let idx = nt.fields.firstIndex(where: { $0.name == name }) { return idx }
+        var f = Anki_Notetypes_Notetype.Field()
+        f.name = name
+        f.clearOrd()
+        nt.fields.append(f)
+        try updateNotetype(nt)
+        let updated = try notetype(notetypeID)
+        guard let idx = updated.fields.firstIndex(where: { $0.name == name }) else {
+            throw BackendError(kind: .ffi, message: "フィールド「\(name)」を追加できませんでした")
+        }
+        return idx
+    }
+
     func notetypeNames() throws -> [Anki_Notetypes_NotetypeNameId] {
         let r: Anki_Notetypes_NotetypeNames = try backend.invoke(AnkiRPC.Notetypes.service, AnkiRPC.Notetypes.getNotetypeNames)
         return r.entries

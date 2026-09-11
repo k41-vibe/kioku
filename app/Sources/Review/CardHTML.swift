@@ -90,6 +90,36 @@ enum CardHTML {
         return typeAnsPattern.stringByReplacingMatches(in: body, range: NSRange(location: 0, length: bodyNS.length), withTemplate: escaped)
     }
 
+    static let memoFieldName = "メモ"
+
+    /// Field names referenced by a template (`{{Field}}`, `{{hint:Field}}`, `{{#Field}}`…).
+    static func referencedFields(in templates: [String]) -> Set<String> {
+        var out = Set<String>()
+        let re = try! NSRegularExpression(pattern: #"\{\{([^}]+)\}\}"#)
+        for t in templates {
+            let ns = t as NSString
+            for m in re.matches(in: t, range: NSRange(location: 0, length: ns.length)) {
+                var inner = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                if inner.hasPrefix("#") || inner.hasPrefix("^") || inner.hasPrefix("/") { inner.removeFirst() }
+                let name = inner.split(separator: ":").last.map(String.init) ?? inner
+                out.insert(name.trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return out
+    }
+
+    /// HTML block listing fields the template never shows (例文 etc.).
+    static func extraFieldsHTML(_ pairs: [(String, String)]) -> String {
+        guard !pairs.isEmpty else { return "" }
+        var s = "<div class=\"kioku-extra\">"
+        for (name, value) in pairs {
+            let escaped = name.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            s += "<div class=\"kioku-extra-row\"><div class=\"kioku-extra-name\">\(escaped)</div><div class=\"kioku-extra-value\">\(value)</div></div>"
+        }
+        s += "</div>"
+        return s
+    }
+
     static func document(body: String, notetypeCSS: String, cardOrdinal: UInt32, night: Bool, forceMonochrome: Bool) -> String {
         var classes = "card card\(cardOrdinal + 1)"
         if night { classes += " nightMode night_mode" }

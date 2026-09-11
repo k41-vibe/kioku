@@ -15,6 +15,8 @@ struct ReviewerView: View {
     @State private var cardStats: Anki_Stats_CardStatsResponse?
     @State private var confirmSuspend = false
     @State private var lastGeneration = 0
+    @State private var showMemoEditor = false
+    @State private var memoDraft = ""
 
     private enum PageID: Int { case previous = 0, question = 1, answer = 2, next = 3 }
 
@@ -59,6 +61,10 @@ struct ReviewerView: View {
         }
         .sheet(isPresented: $showCardInfo) {
             CardInfoView(stats: cardStats)
+        }
+        .sheet(isPresented: $showMemoEditor) {
+            MemoEditorView(text: $memoDraft) { Task { await session.saveMemo(memoDraft) } }
+                .presentationDetents([.medium])
         }
         .alert("エラー", isPresented: Binding(get: { session.errorMessage != nil }, set: { if !$0 { session.errorMessage = nil } })) {
             Button("OK") { session.errorMessage = nil }
@@ -220,6 +226,19 @@ struct ReviewerView: View {
                 railButton(.good, title: "普通", symbol: "checkmark")
                 railButton(.hard, title: "難しい", symbol: "tortoise")
                 railButton(.again, title: "もう一度", symbol: "arrow.counterclockwise")
+                Button {
+                    memoDraft = session.current?.memo ?? ""
+                    showMemoEditor = true
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: (session.current?.memo.isEmpty ?? true) ? "square.and.pencil" : "note.text").font(.body)
+                            .frame(width: 44, height: 44)
+                            .background(Theme.paper.opacity(0.92), in: Circle())
+                            .overlay(Circle().stroke(Theme.gray3))
+                            .foregroundStyle(Theme.ink)
+                        Text("メモ").font(.caption2).foregroundStyle(Theme.gray1)
+                    }
+                }
             } else if page == PageID.question.rawValue {
                 Button {
                     Task {
@@ -262,18 +281,34 @@ struct ReviewerView: View {
 
     /// Replay button, bottom centre.
     private var bottomCenter: some View {
-        HStack {
-            Spacer()
-            Button { session.replayAudio() } label: {
-                Image(systemName: "speaker.wave.2").font(.title3)
-                    .frame(width: 48, height: 48)
-                    .background(Theme.paper.opacity(0.92), in: Circle())
-                    .overlay(Circle().stroke(Theme.gray2))
-                    .foregroundStyle(Theme.ink)
+        VStack(spacing: 8) {
+            if page == PageID.answer.rawValue, let memo = session.current?.memo, !memo.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "note.text").font(.caption).foregroundStyle(Theme.gray1).padding(.top, 2)
+                    Text(memo).font(.footnote).foregroundStyle(Theme.ink).lineLimit(4)
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gray3))
+                .padding(.leading, 12)
+                .padding(.trailing, 84)
+                .onTapGesture { memoDraft = memo; showMemoEditor = true }
             }
-            .opacity(hasAudio ? 1 : 0.35)
-            .disabled(!hasAudio)
-            Spacer()
+            HStack {
+                Spacer()
+                Button {
+                    if hasAudio { session.replayAudio() } else { session.audioNotice = "このカードに音声はありません([sound:] タグが見つかりません)" }
+                } label: {
+                    Image(systemName: "speaker.wave.2").font(.title3)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.paper.opacity(0.92), in: Circle())
+                        .overlay(Circle().stroke(Theme.gray2))
+                        .foregroundStyle(Theme.ink)
+                }
+                .opacity(hasAudio ? 1 : 0.45)
+                Spacer()
+            }
         }
         .padding(.bottom, 14)
     }
@@ -419,5 +454,36 @@ struct CardInfoView: View {
         if secs < 3600 { return "\(secs / 60)分" }
         if secs < 86400 { return "\(secs / 3600)時間" }
         return "\(secs / 86400)日"
+    }
+}
+
+
+struct MemoEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var text: String
+    let onSave: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: $text)
+                    .focused($focused)
+                    .font(.body)
+                    .padding(8)
+                    .background(Theme.paper2, in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gray3))
+                Text("ノートの「メモ」フィールドに保存されます(書き出しても残ります)。").font(.caption2).foregroundStyle(Theme.gray2)
+            }
+            .padding(16)
+            .background(Theme.paper)
+            .navigationTitle("メモ")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("保存") { onSave(); dismiss() } }
+            }
+            .onAppear { focused = true }
+        }
     }
 }

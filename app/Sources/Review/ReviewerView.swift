@@ -165,31 +165,113 @@ struct ReviewerView: View {
     // MARK: - Chrome
 
     private var overlayChrome: some View {
-        VStack(spacing: 0) {
-            topBar
-            if let notice = session.audioNotice {
-                Text(notice)
-                    .font(.caption2).foregroundStyle(Theme.gray1)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.paper2)
-                    .onTapGesture { session.audioNotice = nil }
-            }
-            Spacer()
-            if let flash = session.flash {
-                Text(flash)
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(Theme.paper2, in: Capsule())
-                    .overlay(Capsule().stroke(Theme.gray3))
-                    .padding(.bottom, 8)
-                    .transition(.opacity)
+        ZStack {
+            VStack(spacing: 0) {
+                topBar
+                if let notice = session.audioNotice {
+                    Text(notice)
+                        .font(.caption2).foregroundStyle(Theme.gray1)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.paper2)
+                        .onTapGesture { session.audioNotice = nil }
+                }
+                Spacer()
+                if let flash = session.flash {
+                    Text(flash)
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Theme.paper2, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.gray3))
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                }
+                if session.phase == .studying {
+                    bottomCenter
+                }
             }
             if session.phase == .studying {
-                bottomBar
+                HStack {
+                    Spacer()
+                    rightRail
+                }
             }
         }
         .animation(.easeInOut(duration: 0.15), value: session.flash)
+        .animation(.easeInOut(duration: 0.2), value: page)
+    }
+
+    /// Reels-style column on the right edge: rating buttons (answer side) or
+    /// the "answer" button (question side). Bottom-aligned for the thumb.
+    private var rightRail: some View {
+        VStack(spacing: 14) {
+            Spacer()
+            if page == PageID.answer.rawValue {
+                railButton(.easy, title: "簡単", symbol: "sparkles")
+                railButton(.good, title: "普通", symbol: "checkmark")
+                railButton(.hard, title: "難しい", symbol: "tortoise")
+                railButton(.again, title: "もう一度", symbol: "arrow.counterclockwise")
+            } else if page == PageID.question.rawValue {
+                Button {
+                    Task {
+                        await session.revealAnswer()
+                        withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "eye").font(.title3)
+                            .frame(width: 52, height: 52)
+                            .background(Theme.ink, in: Circle())
+                            .foregroundStyle(Theme.paper)
+                        Text("答え").font(.caption2).foregroundStyle(Theme.ink)
+                    }
+                }
+            }
+            Spacer().frame(height: 96)
+        }
+        .padding(.trailing, 10)
+    }
+
+    private func railButton(_ rating: Rating, title: String, symbol: String) -> some View {
+        let idx = Int(rating.rawValue)
+        let label = session.current.map { $0.labels.indices.contains(idx) ? $0.labels[idx] : "" } ?? ""
+        let primary = rating == .good
+        return Button {
+            commit(rating)
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.body.weight(.medium))
+                    .frame(width: 52, height: 52)
+                    .background(primary ? Theme.ink : Theme.paper.opacity(0.92), in: Circle())
+                    .overlay(Circle().stroke(primary ? Theme.ink : Theme.gray2))
+                    .foregroundStyle(primary ? Theme.paper : Theme.ink)
+                Text(title).font(.caption2).foregroundStyle(Theme.ink)
+                Text(label.isEmpty ? " " : label).font(.caption2.monospacedDigit()).foregroundStyle(Theme.gray1)
+            }
+        }
+    }
+
+    /// Replay button, bottom centre.
+    private var bottomCenter: some View {
+        HStack {
+            Spacer()
+            Button { session.replayAudio() } label: {
+                Image(systemName: "speaker.wave.2").font(.title3)
+                    .frame(width: 48, height: 48)
+                    .background(Theme.paper.opacity(0.92), in: Circle())
+                    .overlay(Circle().stroke(Theme.gray2))
+                    .foregroundStyle(Theme.ink)
+            }
+            .opacity(hasAudio ? 1 : 0.35)
+            .disabled(!hasAudio)
+            Spacer()
+        }
+        .padding(.bottom, 14)
+    }
+
+    private var hasAudio: Bool {
+        guard let cur = session.current else { return false }
+        return page == PageID.answer.rawValue ? !cur.answer.avTags.isEmpty : !cur.question.avTags.isEmpty
     }
 
     private var topBar: some View {
@@ -245,61 +327,6 @@ struct ReviewerView: View {
             Button(role: .destructive) { Task { await session.forgetCard() } } label: { Label("このカードを新規に戻す", systemImage: "arrow.counterclockwise") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.body).frame(width: 36, height: 36)
-        }
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 8) {
-            if page == PageID.answer.rawValue {
-                HStack(spacing: 8) {
-                    answerButton(.again, title: "もう一度")
-                    answerButton(.hard, title: "難しい")
-                    answerButton(.good, title: "普通")
-                    answerButton(.easy, title: "簡単")
-                }
-                Text("上にスクロールで「普通」 · 左スワイプで「もう一度」").font(.caption2).foregroundStyle(Theme.gray2)
-            } else if page == PageID.question.rawValue {
-                Button {
-                    Task {
-                        await session.revealAnswer()
-                        withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
-                    }
-                } label: {
-                    Text("答えを表示")
-                        .font(.body.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Theme.ink, in: RoundedRectangle(cornerRadius: 14))
-                        .foregroundStyle(Theme.paper)
-                }
-                Text("タップか上スクロールでも答えが出ます").font(.caption2).foregroundStyle(Theme.gray2)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
-        .background(
-            LinearGradient(colors: [Theme.paper.opacity(0), Theme.paper.opacity(0.95), Theme.paper], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea(edges: .bottom)
-        )
-    }
-
-    private func answerButton(_ rating: Rating, title: String) -> some View {
-        let idx = Int(rating.rawValue)
-        let label = session.current.map { $0.labels.indices.contains(idx) ? $0.labels[idx] : "" } ?? ""
-        let primary = rating == .good
-        return Button {
-            commit(rating)
-        } label: {
-            VStack(spacing: 3) {
-                Text(label.isEmpty ? " " : label).font(.caption2.monospacedDigit()).foregroundStyle(primary ? Theme.paper.opacity(0.8) : Theme.gray1)
-                Text(title).font(.subheadline.weight(primary ? .semibold : .regular))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(primary ? Theme.ink : Theme.paper2, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(primary ? Theme.ink : Theme.gray3))
-            .foregroundStyle(primary ? Theme.paper : Theme.ink)
         }
     }
 

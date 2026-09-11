@@ -21,7 +21,7 @@ enum Theme {
     html, body { margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
     body { background: #ffffff; color: #1a1a1a; font-family: -apple-system, "Hiragino Sans", "Helvetica Neue", sans-serif; }
     body.nightMode { background: #111111; color: #ececec; }
-    #qa { padding: 28px 20px 140px 20px; min-height: 60vh; word-wrap: break-word; }
+    #qa { padding: 28px 72px 110px 20px; min-height: 60vh; word-wrap: break-word; }
     img { max-width: 100%; height: auto; }
     hr#answer { border: 0; border-top: 1px solid #d9d9d9; margin: 24px 0; }
     body.nightMode hr#answer { border-top-color: #333; }

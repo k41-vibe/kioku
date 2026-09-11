@@ -89,11 +89,13 @@ struct CardWebView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         webView.scrollView.bounces = false
+        webView.scrollView.alwaysBounceVertical = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsLinkPreview = false
         webView.allowsBackForwardNavigationGestures = false
 
-        for dir: UISwipeGestureRecognizer.Direction in [.up, .down, .left, .right] {
+        // Vertical paging is handled by the SwiftUI pager; only horizontal swipes here.
+        for dir: UISwipeGestureRecognizer.Direction in [.left, .right] {
             let swipe = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
             swipe.direction = dir
             swipe.numberOfTouchesRequired = 1

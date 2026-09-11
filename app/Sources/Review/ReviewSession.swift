@@ -3,20 +3,19 @@ import Observation
 import SwiftUI
 
 /// One study session: normal review of a deck, or a preview-mode drill that
-/// never touches the real schedule.
+/// never touches the real schedule. The view shows a vertical reel:
+/// page 0 = question, page 1 = answer, page 2 = next card's question.
 @Observable
 @MainActor
 final class ReviewSession {
     enum Mode: Equatable {
         case normal
-        /// Filtered deck created for this drill; removed when the session ends.
         case drill(filteredDeckID: Int64, title: String)
     }
 
     enum Phase: Equatable {
         case loading
-        case question
-        case answer
+        case studying
         case finished
         case error(String)
     }
@@ -33,10 +32,11 @@ final class ReviewSession {
         var question: CardHTML.Side
         var answer: CardHTML.Side
         var css: String
-        var labels: [String]          // again, hard, good, easy
-        var typeExpected: String?     // correct answer for {{type:}}
+        var labels: [String]
+        var typeExpected: String?
         var shownAt: Date
-        var typedAnswer: String = ""
+        var questionHTML: String = ""
+        var answerHTML: String = ""
     }
 
     let client: AnkiClient
@@ -48,16 +48,21 @@ final class ReviewSession {
 
     var phase: Phase = .loading
     var current: Current?
+    var next: Current?
     var counts = Counts()
-    var html: String = ""
+    var answerRevealed = false
     var answeredCount = 0
     var againCount = 0
     var flash: String?
     var finishMessage: String = ""
     var errorMessage: String?
+    var audioNotice: String?
     var night: Bool = false
     var forceMonochrome: Bool = UserDefaults.standard.object(forKey: "forceMonochrome") as? Bool ?? true
+    /// Incremented every time a new card becomes current; the view uses it to reset paging.
+    var generation = 0
     private var nextDayAt: Date = .distantFuture
+    private var committing = false
 
     init(client: AnkiClient, deckID: Int64, deckName: String, mode: Mode) {
         self.client = client
@@ -65,6 +70,9 @@ final class ReviewSession {
         self.deckName = deckName
         self.mode = mode
         self.audio = CardAudioPlayer(mediaFolder: client.paths.media)
+        self.audio.onError = { [weak self] msg in
+            Task { @MainActor in self?.audioNotice = msg }
+        }
     }
 
     var isDrill: Bool {
@@ -86,7 +94,7 @@ final class ReviewSession {
                 return try c.timingToday()
             }
             nextDayAt = Date(timeIntervalSince1970: TimeInterval(timing.nextDayAt))
-            await loadNext()
+            await loadNext(reuse: nil)
         } catch {
             phase = .error("\(error)")
         }
@@ -104,11 +112,21 @@ final class ReviewSession {
 
     // MARK: - Queue (runs on the backend queue)
 
-    nonisolated private static func fetch(_ c: AnkiClient) throws -> (Current?, Counts) {
-        let queued = try c.queuedCards(limit: 1)
+    nonisolated private static func fetch(_ c: AnkiClient, reuse: Current?) throws -> (Current?, Current?, Counts) {
+        let queued = try c.queuedCards(limit: 2)
         let counts = Counts(new: queued.newCount, learning: queued.learningCount, review: queued.reviewCount)
-        guard let first = queued.cards.first else { return (nil, counts) }
-        return (try build(first, c), counts)
+        guard let first = queued.cards.first else { return (nil, nil, counts) }
+        let cur: Current
+        if let reuse, reuse.queued.card.id == first.card.id {
+            cur = reuse
+        } else {
+            cur = try build(first, c)
+        }
+        var nxt: Current? = nil
+        if queued.cards.count > 1 {
+            nxt = try build(queued.cards[1], c)
+        }
+        return (cur, nxt, counts)
     }
 
     nonisolated private static func build(_ q: QueuedCard, _ c: AnkiClient) throws -> Current {
@@ -116,7 +134,6 @@ final class ReviewSession {
         var qhtml = CardHTML.join(rendered.questionNodes)
         var ahtml = CardHTML.join(rendered.answerNodes)
 
-        // type-the-answer support ({{type:Field}} / {{type:cloze:Field}})
         var typeExpected: String?
         var typeField: String?
         var typeCloze = false
@@ -152,62 +169,66 @@ final class ReviewSession {
         )
     }
 
-    func loadNext() async {
+    private func render(_ cur: inout Current, comparison: String? = nil) {
+        cur.questionHTML = CardHTML.document(body: cur.question.html, notetypeCSS: cur.css, cardOrdinal: cur.queued.card.templateIdx,
+                                             night: night, forceMonochrome: forceMonochrome)
+        let body = CardHTML.injectTypeComparison(cur.answer.html, comparison: comparison)
+        cur.answerHTML = CardHTML.document(body: body, notetypeCSS: cur.css, cardOrdinal: cur.queued.card.templateIdx,
+                                           night: night, forceMonochrome: forceMonochrome)
+    }
+
+    func loadNext(reuse: Current?) async {
         do {
             if Date() > nextDayAt {
                 let timing = try await client.perform { c in try c.timingToday() }
                 nextDayAt = Date(timeIntervalSince1970: TimeInterval(timing.nextDayAt))
             }
-            let (next, counts) = try await client.perform { c in try Self.fetch(c) }
+            let (cur, nxt, counts) = try await client.perform { c in try Self.fetch(c, reuse: reuse) }
             self.counts = counts
-            guard var cur = next else {
+            guard var cur else {
                 await finish()
                 return
             }
             cur.shownAt = Date()
+            render(&cur)
+            if var n = nxt { render(&n); next = n } else { next = nil }
             current = cur
-            showQuestion()
+            answerRevealed = false
+            generation += 1
+            phase = .studying
+            audio.play(cur.question.avTags)
         } catch {
             phase = .error("\(error)")
         }
     }
 
-    private func showQuestion() {
-        guard let cur = current else { return }
-        html = CardHTML.document(body: cur.question.html, notetypeCSS: cur.css, cardOrdinal: cur.queued.card.templateIdx,
-                                 night: night, forceMonochrome: forceMonochrome)
-        phase = .question
-        audio.play(cur.question.avTags)
-    }
+    // MARK: - Reveal / answer
 
-    func showAnswer(typed: String? = nil) async {
-        guard var cur = current, phase == .question else { return }
-        let typedAnswer: String
-        if let typed { typedAnswer = typed } else { typedAnswer = await web.readTypedAnswer() }
-        cur.typedAnswer = typedAnswer
-        var body = cur.answer.html
+    /// Called when the answer page becomes visible.
+    func revealAnswer(typed: String? = nil) async {
+        guard var cur = current, !answerRevealed else { return }
         if let expected = cur.typeExpected {
+            let typedAnswer: String
+            if let typed { typedAnswer = typed } else { typedAnswer = await web.readTypedAnswer() }
             let comparison = try? await client.perform { c in
                 try c.compareAnswer(expected: expected, provided: typedAnswer, combining: true)
             }
-            body = CardHTML.injectTypeComparison(body, comparison: comparison)
-        } else {
-            body = CardHTML.injectTypeComparison(body, comparison: nil)
+            render(&cur, comparison: comparison)
+            current = cur
         }
-        current = cur
-        html = CardHTML.document(body: body, notetypeCSS: cur.css, cardOrdinal: cur.queued.card.templateIdx,
-                                 night: night, forceMonochrome: forceMonochrome)
-        phase = .answer
+        answerRevealed = true
         audio.play(cur.answer.avTags)
     }
 
+    /// Commit a rating for the current card and move to the next one.
     func answer(_ rating: Rating) async {
-        guard let cur = current, phase == .answer else { return }
+        guard let cur = current, phase == .studying, !committing else { return }
+        committing = true
+        defer { committing = false }
         let elapsedMs = Date().timeIntervalSince(cur.shownAt) * 1000
         let taken = UInt32(min(max(elapsedMs, 0), 3_600_000))
         let idx = Int(rating.rawValue)
         let label = idx >= 0 && idx < cur.labels.count ? cur.labels[idx] : ""
-        phase = .loading
         audio.stop()
         do {
             try await client.perform { c in
@@ -221,7 +242,7 @@ final class ReviewSession {
                 try? await Task.sleep(nanoseconds: 900_000_000)
                 if self?.flash == text { self?.flash = nil }
             }
-            await loadNext()
+            await loadNext(reuse: next)
         } catch {
             phase = .error("\(error)")
         }
@@ -238,14 +259,15 @@ final class ReviewSession {
     }
 
     func undo() async {
+        guard !committing else { return }
         audio.stop()
         phase = .loading
         do {
             _ = try await client.perform { c in try c.undo() }
             if answeredCount > 0 { answeredCount -= 1 }
-            await loadNext()
+            await loadNext(reuse: nil)
         } catch let e as BackendError where e.isUndoEmpty {
-            await loadNext()
+            await loadNext(reuse: nil)
         } catch {
             phase = .error("\(error)")
         }
@@ -253,7 +275,7 @@ final class ReviewSession {
 
     func replayAudio() {
         guard let cur = current else { return }
-        audio.play(phase == .answer ? cur.answer.avTags : cur.question.avTags)
+        audio.play(answerRevealed ? cur.answer.avTags : cur.question.avTags)
     }
 
     func play(side: String, index: Int) {
@@ -288,13 +310,14 @@ final class ReviewSession {
     }
 
     private func cardOp(_ op: @escaping (AnkiClient, Int64) throws -> Void) async {
-        guard let cur = current else { return }
+        guard let cur = current, !committing else { return }
+        committing = true
+        defer { committing = false }
         audio.stop()
-        phase = .loading
         do {
             try await client.perform { c in try op(c, cur.queued.card.id) }
             answeredCount += 1
-            await loadNext()
+            await loadNext(reuse: nil)
         } catch {
             phase = .error("\(error)")
         }
@@ -310,7 +333,7 @@ final class ReviewSession {
     private func finish() async {
         audio.stop()
         current = nil
-        html = ""
+        next = nil
         if isDrill {
             finishMessage = "この範囲を一周しました。\nもう一度: \(againCount) 回"
         } else {

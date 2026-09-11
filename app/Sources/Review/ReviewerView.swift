@@ -1,15 +1,22 @@
 import SwiftUI
 
-/// Reel-style study screen: one card fills the screen, tap to flip, swipe up
-/// for Good / left for Again, with all four Anki buttons along the bottom.
+/// Reel-style study screen: a vertical pager. Page 0 = question, page 1 =
+/// answer, page 2 = the next card's question (pre-rendered). Paging past the
+/// answer commits the pending rating (Good by default) and the next card
+/// becomes page 0 without any visible jump.
 struct ReviewerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     @State var session: ReviewSession
+    @State private var page: Int? = 0
+    @State private var pendingRating: Rating = .good
     @State private var showCardInfo = false
     @State private var cardStats: Anki_Stats_CardStatsResponse?
     @State private var confirmSuspend = false
+    @State private var lastGeneration = 0
+
+    private enum PageID: Int { case question = 0, answer = 1, next = 2 }
 
     var body: some View {
         ZStack {
@@ -19,12 +26,29 @@ struct ReviewerView: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
-        .statusBarHidden(false)
         .task {
             session.night = colorScheme == .dark
             await session.start()
         }
         .onChange(of: colorScheme) { _, new in session.night = new == .dark }
+        .onChange(of: session.generation) { _, _ in
+            // A new card became current: snap back to its question page without animation.
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { page = PageID.question.rawValue }
+            pendingRating = .good
+        }
+        .onChange(of: page) { _, new in
+            guard let new, session.phase == .studying else { return }
+            switch PageID(rawValue: new) {
+            case .answer:
+                Task { await session.revealAnswer() }
+            case .next:
+                let rating = pendingRating
+                Task { await session.answer(rating) }
+            default:
+                break
+            }
+        }
         .onDisappear {
             Task {
                 await session.end()
@@ -42,10 +66,12 @@ struct ReviewerView: View {
         }
     }
 
+    // MARK: - Pages
+
     @ViewBuilder
     private var content: some View {
         switch session.phase {
-        case .loading where session.html.isEmpty:
+        case .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .finished:
             finishedView
@@ -55,32 +81,84 @@ struct ReviewerView: View {
                 Text(msg).font(.footnote).foregroundStyle(Theme.gray1).multilineTextAlignment(.center).padding()
                 Button("戻る") { dismiss() }.buttonStyle(.bordered)
             }
-        default:
-            CardWebView(html: session.html, mediaFolder: session.client.paths.media, controller: session.web) { event in
-                handle(event)
+        case .studying:
+            if let cur = session.current {
+                reel(cur)
             }
-            .ignoresSafeArea(edges: .bottom)
-            .opacity(session.phase == .loading ? 0.5 : 1)
         }
     }
 
-    private func handle(_ event: CardWebEvent) {
+    private func reel(_ cur: ReviewSession.Current) -> some View {
+        GeometryReader { geo in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: geo.size.height, isQuestion: true)
+                        .id(PageID.question.rawValue)
+                    cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: geo.size.height, isQuestion: false)
+                        .id(PageID.answer.rawValue)
+                    Group {
+                        if let nxt = session.next {
+                            cardPage(html: nxt.questionHTML, key: "q\(nxt.queued.card.id)", height: geo.size.height, isQuestion: true, interactive: false)
+                        } else {
+                            endPage(height: geo.size.height)
+                        }
+                    }
+                    .id(PageID.next.rawValue)
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $page)
+            .scrollBounceBehavior(.basedOnSize)
+            .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private func cardPage(html: String, key: String, height: CGFloat, isQuestion: Bool, interactive: Bool = true) -> some View {
+        CardWebView(html: html, mediaFolder: session.client.paths.media, controller: interactive && isQuestion ? session.web : CardWebController()) { event in
+            guard interactive else { return }
+            handle(event, isQuestion: isQuestion)
+        }
+        .id(key)
+        .frame(height: height)
+        .clipped()
+    }
+
+    private func endPage(height: CGFloat) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.circle").font(.system(size: 36, weight: .light)).foregroundStyle(Theme.gray1)
+            Text("これが最後のカードです").font(.footnote).foregroundStyle(Theme.gray1)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+    }
+
+    private func handle(_ event: CardWebEvent, isQuestion: Bool) {
         switch event {
-        case .tap(let typed):
-            if session.phase == .question { Task { await session.showAnswer(typed: typed) } }
-        case .showAnswer(let typed):
-            if session.phase == .question { Task { await session.showAnswer(typed: typed) } }
+        case .tap(let typed), .showAnswer(let typed):
+            if isQuestion, page == PageID.question.rawValue {
+                Task {
+                    await session.revealAnswer(typed: typed)
+                    withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                }
+            }
         case .play(let side, let idx):
             session.play(side: side, index: idx)
         case .swipe(let dir):
-            guard session.phase == .answer else {
-                if session.phase == .question, dir == .up { Task { await session.showAnswer() } }
-                return
-            }
-            if dir == .up { Task { await session.answer(.good) } }
-            else if dir == .left { Task { await session.answer(.again) } }
+            if dir == .left { commit(.again) }
         case .loaded:
             break
+        }
+    }
+
+    /// Animate to the next card, committing `rating` when the page settles.
+    private func commit(_ rating: Rating) {
+        guard session.phase == .studying else { return }
+        pendingRating = rating
+        if page == PageID.next.rawValue {
+            Task { await session.answer(rating) }
+        } else {
+            withAnimation(.easeInOut(duration: 0.3)) { page = PageID.next.rawValue }
         }
     }
 
@@ -89,6 +167,14 @@ struct ReviewerView: View {
     private var overlayChrome: some View {
         VStack(spacing: 0) {
             topBar
+            if let notice = session.audioNotice {
+                Text(notice)
+                    .font(.caption2).foregroundStyle(Theme.gray1)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.paper2)
+                    .onTapGesture { session.audioNotice = nil }
+            }
             Spacer()
             if let flash = session.flash {
                 Text(flash)
@@ -99,7 +185,7 @@ struct ReviewerView: View {
                     .padding(.bottom, 8)
                     .transition(.opacity)
             }
-            if session.phase == .question || session.phase == .answer || (session.phase == .loading && !session.html.isEmpty) {
+            if session.phase == .studying {
                 bottomBar
             }
         }
@@ -156,7 +242,7 @@ struct ReviewerView: View {
                 }
             } label: { Label("カード情報", systemImage: "info.circle") }
             Divider()
-            Button(role: .destructive) { Task { await session.forgetCard() } } label: { Label("新規に戻す", systemImage: "arrow.counterclockwise") }
+            Button(role: .destructive) { Task { await session.forgetCard() } } label: { Label("このカードを新規に戻す", systemImage: "arrow.counterclockwise") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.body).frame(width: 36, height: 36)
         }
@@ -164,16 +250,20 @@ struct ReviewerView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 8) {
-            if session.phase == .answer {
+            if page == PageID.answer.rawValue {
                 HStack(spacing: 8) {
-                    answerButton(.again, title: "もう一度", hint: "← スワイプ")
-                    answerButton(.hard, title: "難しい", hint: nil)
-                    answerButton(.good, title: "普通", hint: "↑ スワイプ")
-                    answerButton(.easy, title: "簡単", hint: nil)
+                    answerButton(.again, title: "もう一度")
+                    answerButton(.hard, title: "難しい")
+                    answerButton(.good, title: "普通")
+                    answerButton(.easy, title: "簡単")
                 }
-            } else {
+                Text("上にスクロールで「普通」 · 左スワイプで「もう一度」").font(.caption2).foregroundStyle(Theme.gray2)
+            } else if page == PageID.question.rawValue {
                 Button {
-                    Task { await session.showAnswer() }
+                    Task {
+                        await session.revealAnswer()
+                        withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                    }
                 } label: {
                     Text("答えを表示")
                         .font(.body.weight(.medium))
@@ -182,8 +272,7 @@ struct ReviewerView: View {
                         .background(Theme.ink, in: RoundedRectangle(cornerRadius: 14))
                         .foregroundStyle(Theme.paper)
                 }
-                .disabled(session.phase != .question)
-                Text("カードをタップしても答えが出ます").font(.caption2).foregroundStyle(Theme.gray2)
+                Text("タップか上スクロールでも答えが出ます").font(.caption2).foregroundStyle(Theme.gray2)
             }
         }
         .padding(.horizontal, 12)
@@ -195,12 +284,12 @@ struct ReviewerView: View {
         )
     }
 
-    private func answerButton(_ rating: Rating, title: String, hint: String?) -> some View {
+    private func answerButton(_ rating: Rating, title: String) -> some View {
         let idx = Int(rating.rawValue)
         let label = session.current.map { $0.labels.indices.contains(idx) ? $0.labels[idx] : "" } ?? ""
         let primary = rating == .good
         return Button {
-            Task { await session.answer(rating) }
+            commit(rating)
         } label: {
             VStack(spacing: 3) {
                 Text(label.isEmpty ? " " : label).font(.caption2.monospacedDigit()).foregroundStyle(primary ? Theme.paper.opacity(0.8) : Theme.gray1)
@@ -212,7 +301,6 @@ struct ReviewerView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(primary ? Theme.ink : Theme.gray3))
             .foregroundStyle(primary ? Theme.paper : Theme.ink)
         }
-        .disabled(session.phase != .answer)
     }
 
     private var finishedView: some View {

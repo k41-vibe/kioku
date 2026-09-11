@@ -286,6 +286,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var mono = true
     @State private var extras = true
+    @State private var nativeLayout = true
     @State private var fsrs = false
     @State private var fsrsLoaded = false
     @State private var checkResult: String?
@@ -299,6 +300,9 @@ struct SettingsView: View {
                 Section("見た目") {
                     Toggle("アプリの見た目を優先(デッキの色指定を無視)", isOn: $mono)
                         .onChange(of: mono) { _, v in model.forceMonochrome = v }
+                    Toggle("Kioku レイアウト(単語・例文・意味を自動で組む)", isOn: $nativeLayout)
+                        .onChange(of: nativeLayout) { _, v in UserDefaults.standard.set(v, forKey: "nativeLayout") }
+                    Text("オフにするとデッキ作者の HTML テンプレートをそのまま表示します。").font(.caption2).foregroundStyle(Theme.gray2)
                     Toggle("テンプレートに無いフィールドも答えの下に表示", isOn: $extras)
                         .onChange(of: extras) { _, v in UserDefaults.standard.set(v, forKey: "showExtraFields") }
                 }
@@ -378,6 +382,7 @@ struct SettingsView: View {
             .onAppear {
                 mono = model.forceMonochrome
                 extras = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
+                nativeLayout = UserDefaults.standard.object(forKey: "nativeLayout") as? Bool ?? true
             }
             .task {
                 if let on = try? await model.client?.perform({ c in try c.isFSRSEnabled() }) {

@@ -17,6 +17,9 @@ struct ReviewerView: View {
     @State private var lastGeneration = 0
     @State private var showMemoEditor = false
     @State private var memoDraft = ""
+    /// Native layout: how far the answer panel is pulled up (0...1).
+    @State private var reveal: CGFloat = 0
+    @State private var dragging = false
 
     private enum PageID: Int { case previous = 0, question = 1, answer = 2, next = 3 }
 
@@ -36,7 +39,7 @@ struct ReviewerView: View {
         .onChange(of: session.generation) { _, _ in
             // A new card became current: snap back to its question page without animation.
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { page = PageID.question.rawValue }
+            withTransaction(t) { page = PageID.question.rawValue; reveal = 0 }
             pendingRating = .good
         }
         .onChange(of: page) { _, new in
@@ -45,7 +48,7 @@ struct ReviewerView: View {
             case .previous:
                 Task { await session.undo() }
             case .answer:
-                Task { await session.revealAnswer() }
+                if !session.isNative { Task { await session.revealAnswer() } }
             case .next:
                 let rating = pendingRating
                 Task { await session.answer(rating) }
@@ -98,24 +101,36 @@ struct ReviewerView: View {
 
     private func reel(_ cur: ReviewSession.Current) -> some View {
         GeometryReader { geo in
+            let h = geo.size.height
+            let native = session.isNative
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 0) {
                     if let prev = session.previous {
-                        cardPage(html: prev.questionHTML, key: "p\(prev.queued.card.id)", height: geo.size.height, isQuestion: true, interactive: false)
+                        anyPage(prev, height: h, interactive: false, progress: 0)
                             .overlay(alignment: .bottom) {
                                 Text("下に引くと戻ります(回答を取り消し)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 110)
                             }
                             .id(PageID.previous.rawValue)
                     }
-                    cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: geo.size.height, isQuestion: true)
+                    if native, let n = cur.native {
+                        NativeCardPage(card: n, memo: cur.memo, height: h, progress: reveal, interactive: true) { tags in
+                            session.audio.play(tags)
+                        }
+                        .id("n\(cur.queued.card.id)")
+                        .gesture(revealGesture(height: h))
+                        .onTapGesture { openAnswer() }
                         .id(PageID.question.rawValue)
-                    cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: geo.size.height, isQuestion: false)
-                        .id(PageID.answer.rawValue)
+                    } else {
+                        cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: h, isQuestion: true)
+                            .id(PageID.question.rawValue)
+                        cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: h, isQuestion: false)
+                            .id(PageID.answer.rawValue)
+                    }
                     Group {
                         if let nxt = session.next {
-                            cardPage(html: nxt.questionHTML, key: "q\(nxt.queued.card.id)", height: geo.size.height, isQuestion: true, interactive: false)
+                            anyPage(nxt, height: h, interactive: false, progress: 0)
                         } else {
-                            endPage(height: geo.size.height)
+                            endPage(height: h)
                         }
                     }
                     .id(PageID.next.rawValue)
@@ -125,8 +140,55 @@ struct ReviewerView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $page)
             .scrollBounceBehavior(.basedOnSize)
+            .scrollDisabled(native && !session.answerRevealed)
             .ignoresSafeArea(edges: .bottom)
         }
+    }
+
+    /// A page for any card (native layout when possible, template HTML otherwise).
+    @ViewBuilder
+    private func anyPage(_ c: ReviewSession.Current, height: CGFloat, interactive: Bool, progress: CGFloat) -> some View {
+        if session.useNativeLayout, let n = c.native {
+            NativeCardPage(card: n, memo: c.memo, height: height, progress: progress, interactive: interactive)
+                .id("n\(c.queued.card.id)")
+        } else {
+            cardPage(html: c.questionHTML, key: "q\(c.queued.card.id)", height: height, isQuestion: true, interactive: interactive)
+        }
+    }
+
+    /// Pull-up gesture that drags the answer panel with the finger.
+    private func revealGesture(height: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged { v in
+                guard !session.answerRevealed else { return }
+                let dy = v.translation.height
+                let dx = v.translation.width
+                if abs(dx) > abs(dy) { return }
+                dragging = true
+                reveal = min(max(-dy / (height * 0.45), 0), 1)
+            }
+            .onEnded { v in
+                let dy = v.translation.height
+                let dx = v.translation.width
+                dragging = false
+                if !session.answerRevealed && abs(dx) > 70 && abs(dx) > abs(dy) * 1.5 {
+                    if dx < 0 { commit(.again) }
+                    withAnimation(.easeOut(duration: 0.2)) { reveal = 0 }
+                    return
+                }
+                guard !session.answerRevealed else { return }
+                if reveal > 0.3 || v.predictedEndTranslation.height < -160 {
+                    openAnswer()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { reveal = 0 }
+                }
+            }
+    }
+
+    private func openAnswer() {
+        guard session.phase == .studying, !session.answerRevealed else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { reveal = 1 }
+        Task { await session.revealAnswer() }
     }
 
     private func cardPage(html: String, key: String, height: CGFloat, isQuestion: Bool, interactive: Bool = true) -> some View {
@@ -172,6 +234,12 @@ struct ReviewerView: View {
         pendingRating = rating
         if page == PageID.next.rawValue {
             Task { await session.answer(rating) }
+        } else if session.isNative && !session.answerRevealed {
+            // Rating without opening the answer (e.g. left swipe = again): open, then move on.
+            Task {
+                await session.revealAnswer()
+                withAnimation(.easeInOut(duration: 0.3)) { page = PageID.next.rawValue }
+            }
         } else {
             withAnimation(.easeInOut(duration: 0.3)) { page = PageID.next.rawValue }
         }
@@ -221,7 +289,7 @@ struct ReviewerView: View {
     private var rightRail: some View {
         VStack(spacing: 12) {
             Spacer()
-            if page == PageID.answer.rawValue {
+            if page == PageID.answer.rawValue || (session.isNative && session.answerRevealed && page == PageID.question.rawValue) {
                 railButton(.easy, title: "簡単", symbol: "sparkles")
                 railButton(.good, title: "普通", symbol: "checkmark")
                 railButton(.hard, title: "難しい", symbol: "tortoise")
@@ -241,9 +309,13 @@ struct ReviewerView: View {
                 }
             } else if page == PageID.question.rawValue {
                 Button {
-                    Task {
-                        await session.revealAnswer()
-                        withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                    if session.isNative {
+                        openAnswer()
+                    } else {
+                        Task {
+                            await session.revealAnswer()
+                            withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                        }
                     }
                 } label: {
                     VStack(spacing: 5) {
@@ -282,7 +354,7 @@ struct ReviewerView: View {
     /// Replay button, bottom centre.
     private var bottomCenter: some View {
         VStack(spacing: 8) {
-            if page == PageID.answer.rawValue, let memo = session.current?.memo, !memo.isEmpty {
+            if !session.isNative, page == PageID.answer.rawValue, let memo = session.current?.memo, !memo.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "note.text").font(.caption).foregroundStyle(Theme.gray1).padding(.top, 2)
                     Text(memo).font(.footnote).foregroundStyle(Theme.ink).lineLimit(4)
@@ -315,6 +387,9 @@ struct ReviewerView: View {
 
     private var hasAudio: Bool {
         guard let cur = session.current else { return false }
+        if session.isNative, let n = cur.native {
+            return session.answerRevealed ? !(n.answerAudio.isEmpty && n.questionAudio.isEmpty) : !n.questionAudio.isEmpty
+        }
         return page == PageID.answer.rawValue ? !cur.answer.avTags.isEmpty : !cur.question.avTags.isEmpty
     }
 

@@ -363,6 +363,41 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertFalse(try client.isFSRSEnabled())
     }
 
+    func testNativeCardClassifiesFields() throws {
+        var nt = Anki_Notetypes_Notetype()
+        for name in ["ID", "単語", "品詞", "意味", "例文", "例文意味", "単語音声", "例文音声"] {
+            var f = Anki_Notetypes_Notetype.Field(); f.name = name; nt.fields.append(f)
+        }
+        nt.config.sortFieldIdx = 1
+        var note = Anki_Notes_Note()
+        note.fields = ["p1q5_0300", "whereas", "接続詞", "～であるのに", "Whereas the old system was complex, the new one is simple.",
+                       "以前の制度は複雑だったが、新しい制度はシンプルだ。", "[sound:w.mp3]", "[sound:e.mp3]"]
+        let card = try XCTUnwrap(NativeCard.build(note: note, notetype: nt, memoField: "メモ",
+                                                  strip: { try! self.client.stripHTML($0) },
+                                                  avTags: { try! self.client.extractAVTags($0, questionSide: true).avTags }))
+        XCTAssertEqual(card.word, "whereas")
+        XCTAssertEqual(card.reading, "接続詞")
+        XCTAssertEqual(card.meaning, ["～であるのに"])
+        XCTAssertTrue(card.example.hasPrefix("Whereas"))
+        XCTAssertTrue(card.exampleMeaning.hasPrefix("以前"))
+        XCTAssertEqual(card.wordAudio.count, 1)
+        XCTAssertEqual(card.exampleAudio.count, 1)
+        XCTAssertTrue(card.extras.isEmpty)
+
+        // 鉄壁 style: Front = "word<br>sentence", Back = meaning
+        var basic = Anki_Notetypes_Notetype()
+        for name in ["Front", "Back"] { var f = Anki_Notetypes_Notetype.Field(); f.name = name; basic.fields.append(f) }
+        var n2 = Anki_Notes_Note()
+        n2.fields = ["shrink<br>When you open this package, the contract becomes effective. [sound:s.mp3]", "縮む、小さくなる"]
+        let c2 = try XCTUnwrap(NativeCard.build(note: n2, notetype: basic, memoField: "メモ",
+                                                strip: { try! self.client.stripHTML($0.replacingOccurrences(of: "<br>", with: "\n")) },
+                                                avTags: { try! self.client.extractAVTags($0, questionSide: true).avTags }))
+        XCTAssertEqual(c2.word, "shrink")
+        XCTAssertTrue(c2.example.hasPrefix("When you open"))
+        XCTAssertEqual(c2.meaning, ["縮む、小さくなる"])
+        XCTAssertEqual(c2.wordAudio.count, 1)
+    }
+
     func testBackendErrorIsDecoded() throws {
         XCTAssertThrowsError(try client.card(123456789)) { err in
             let e = err as? BackendError

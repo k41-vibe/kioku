@@ -54,10 +54,13 @@ final class ReviewSession {
         var memo: String = ""
         var note: Anki_Notes_Note? = nil
         var memoFieldIndex: Int? = nil
+        /// Kioku layout built from the fields; nil when the note does not fit it.
+        var native: NativeCard? = nil
     }
 
     let notetypes = NotetypeCache()
     var showExtraFields: Bool = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
+    var useNativeLayout: Bool = UserDefaults.standard.object(forKey: "nativeLayout") as? Bool ?? true
 
     let client: AnkiClient
     let deckID: Int64
@@ -199,6 +202,18 @@ final class ReviewSession {
         qhtml = CardHTML.replacePlayTags(qav.text)
         ahtml = CardHTML.replacePlayTags(aav.text)
 
+        // Kioku layout (native), unless the card needs typing.
+        var native: NativeCard? = nil
+        if typeExpected == nil {
+            native = NativeCard.build(note: note, notetype: nt, memoField: CardHTML.memoFieldName, strip: { html in
+                let withBreaks = html.replacingOccurrences(of: "<br>", with: "\n").replacingOccurrences(of: "<br/>", with: "\n")
+                    .replacingOccurrences(of: "<br />", with: "\n").replacingOccurrences(of: "</div>", with: "\n").replacingOccurrences(of: "</p>", with: "\n")
+                return (try? c.stripHTML(withBreaks)) ?? withBreaks
+            }, avTags: { text in
+                (try? c.extractAVTags(text, questionSide: true).avTags) ?? []
+            })
+        }
+
         let labels = try c.describeNextStates(q.states)
         return Current(
             queued: q,
@@ -210,8 +225,22 @@ final class ReviewSession {
             shownAt: Date(),
             memo: memo,
             note: note,
-            memoFieldIndex: memoIdx
+            memoFieldIndex: memoIdx,
+            native: native
         )
+    }
+
+    /// True when the current card is shown with the Kioku layout.
+    var isNative: Bool { useNativeLayout && current?.native != nil }
+
+    func playQuestionAudio() {
+        guard let cur = current else { return }
+        if isNative, let n = cur.native { audio.play(n.questionAudio) } else { audio.play(cur.question.avTags) }
+    }
+
+    func playAnswerAudio() {
+        guard let cur = current else { return }
+        if isNative, let n = cur.native { audio.play(n.answerAudio) } else { audio.play(cur.answer.avTags) }
     }
 
     /// Save a memo into the note field named メモ, creating the field if needed.
@@ -267,7 +296,7 @@ final class ReviewSession {
             answerRevealed = false
             generation += 1
             phase = .studying
-            audio.play(cur.question.avTags)
+            playQuestionAudio()
         } catch {
             phase = .error("\(error)")
         }
@@ -288,7 +317,7 @@ final class ReviewSession {
             current = cur
         }
         answerRevealed = true
-        audio.play(cur.answer.avTags)
+        playAnswerAudio()
     }
 
     /// Commit a rating for the current card and move to the next one.
@@ -354,8 +383,7 @@ final class ReviewSession {
     }
 
     func replayAudio() {
-        guard let cur = current else { return }
-        audio.play(answerRevealed ? cur.answer.avTags : cur.question.avTags)
+        if answerRevealed { playAnswerAudio() } else { playQuestionAudio() }
     }
 
     func play(side: String, index: Int) {

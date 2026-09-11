@@ -23,13 +23,18 @@ struct StudyPlan: Codable, Identifiable, Equatable {
     var startChapterIndex: Int = 0
     /// Which subdeck level counts as a unit: 1 = 章 (direct children), 2 = 節 (grandchildren).
     var level: Int = 1
+    /// Deadline mode: finish chapters `startChapterIndex...endChapterIndex` by `endDay`
+    /// (inclusive). Daily new = remaining / days left, recomputed every day.
+    var endDay: Int? = nil
+    var endChapterIndex: Int? = nil
     /// Original per-deck new limit before the plan took over (nil = preset).
     var previousNewLimit: UInt32?
 
     var unitName: String { level >= 2 ? "節" : "章" }
+    var isDeadline: Bool { endDay != nil }
 
     init(deckID: Int64, unit: Unit, amountPerPeriod: Double, periodDays: Int, startDay: Int,
-         startChapterIndex: Int = 0, level: Int = 1, previousNewLimit: UInt32? = nil) {
+         startChapterIndex: Int = 0, level: Int = 1, endDay: Int? = nil, endChapterIndex: Int? = nil, previousNewLimit: UInt32? = nil) {
         self.deckID = deckID
         self.unit = unit
         self.amountPerPeriod = amountPerPeriod
@@ -37,11 +42,13 @@ struct StudyPlan: Codable, Identifiable, Equatable {
         self.startDay = startDay
         self.startChapterIndex = startChapterIndex
         self.level = level
+        self.endDay = endDay
+        self.endChapterIndex = endChapterIndex
         self.previousNewLimit = previousNewLimit
     }
 
     private enum CodingKeys: String, CodingKey {
-        case deckID, unit, amountPerPeriod, periodDays, startDay, startChapterIndex, level, previousNewLimit
+        case deckID, unit, amountPerPeriod, periodDays, startDay, startChapterIndex, level, endDay, endChapterIndex, previousNewLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -53,12 +60,15 @@ struct StudyPlan: Codable, Identifiable, Equatable {
         startDay = try c.decode(Int.self, forKey: .startDay)
         startChapterIndex = try c.decodeIfPresent(Int.self, forKey: .startChapterIndex) ?? 0
         level = try c.decodeIfPresent(Int.self, forKey: .level) ?? 1
+        endDay = try c.decodeIfPresent(Int.self, forKey: .endDay)
+        endChapterIndex = try c.decodeIfPresent(Int.self, forKey: .endChapterIndex)
         previousNewLimit = try c.decodeIfPresent(UInt32.self, forKey: .previousNewLimit)
     }
 
     var perDay: Double { amountPerPeriod / Double(max(periodDays, 1)) }
 
     var label: String {
+        if isDeadline { return "期限型" }
         let period: String
         switch periodDays {
         case 1: period = "日"
@@ -113,9 +123,27 @@ enum PlanEngine {
         let day = max(today - plan.startDay, 0)
         let daysLeftInPeriod = max(plan.periodDays - (day % max(plan.periodDays, 1)), 1)
         let start = min(max(plan.startChapterIndex, 0), max(chapters.count - 1, 0))
-        let scope = chapters.isEmpty ? [] : Array(chapters[start...])
         var limits: [Int64: UInt32] = [:]
         for ch in chapters.prefix(start) { limits[ch.deckID] = 0 }
+
+        // Deadline mode: finish a range of units by endDay.
+        if let endDay = plan.endDay {
+            let endIdx = min(max(plan.endChapterIndex ?? (chapters.count - 1), start), max(chapters.count - 1, 0))
+            let scope = chapters.isEmpty ? [] : Array(chapters[start...endIdx])
+            for ch in chapters.dropFirst(endIdx + 1) { limits[ch.deckID] = 0 }
+            for ch in scope { limits[ch.deckID] = unlimited }
+            let total = chapters.isEmpty ? deckTotal : scope.reduce(0) { $0 + $1.total }
+            let introduced = chapters.isEmpty ? (deckTotal - deckNewRemaining) : scope.reduce(0) { $0 + $1.introduced }
+            let remaining = max(total - introduced, 0)
+            let daysLeft = max(endDay - today + 1, 1)
+            let todayNew = Int((Double(remaining) / Double(daysLeft)).rounded(.up))
+            let current = scope.firstIndex { $0.newRemaining > 0 }.map { $0 + start }
+            return PlanStatus(plan: plan, dayIndex: day, targetIntroducedByToday: introduced + todayNew, introduced: introduced,
+                              totalInScope: total, todayNew: todayNew, currentChapterIndex: current,
+                              chapters: chapters, chapterLimits: limits, daysLeftInPeriod: daysLeft)
+        }
+
+        let scope = chapters.isEmpty ? [] : Array(chapters[start...])
 
         // Totals over the scope (whole deck when there are no chapters).
         let scopeTotal = chapters.isEmpty ? deckTotal : scope.reduce(0) { $0 + $1.total }

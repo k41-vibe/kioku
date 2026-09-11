@@ -288,6 +288,33 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertNil(decoded.first?.previousNewLimit)
     }
 
+    func testPlanDeadlineSpreadsRemainingOverDaysLeft() throws {
+        // one section of 81 cards, Friday (today=100) to Tuesday (104): 5 days -> 17/day
+        let ch = chapters([(30, 0), (81, 81), (40, 40)])
+        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 7, startDay: 100,
+                             startChapterIndex: 1, level: 1, endDay: 104, endChapterIndex: 1)
+        let d0 = PlanEngine.status(plan: plan, today: 100, chapters: ch, deckTotal: 151, deckNewRemaining: 121)
+        XCTAssertEqual(d0.todayNew, 17)
+        XCTAssertEqual(d0.daysLeftInPeriod, 5)
+        XCTAssertEqual(d0.chapterLimits[100], 0)
+        XCTAssertEqual(d0.chapterLimits[101], PlanEngine.unlimited)
+        XCTAssertEqual(d0.chapterLimits[102], 0)
+        XCTAssertEqual(d0.totalInScope, 81)
+        // skipped a day: 81 left, 4 days -> 21
+        let d1 = PlanEngine.status(plan: plan, today: 101, chapters: ch, deckTotal: 151, deckNewRemaining: 121)
+        XCTAssertEqual(d1.todayNew, 21)
+        // last day: everything remaining
+        let d4 = PlanEngine.status(plan: plan, today: 104, chapters: chapters([(30, 0), (81, 10), (40, 40)]), deckTotal: 151, deckNewRemaining: 50)
+        XCTAssertEqual(d4.todayNew, 10)
+        XCTAssertEqual(d4.daysLeftInPeriod, 1)
+        // past the deadline: still finish what is left, 1 day at a time
+        let d9 = PlanEngine.status(plan: plan, today: 109, chapters: chapters([(30, 0), (81, 3), (40, 40)]), deckTotal: 151, deckNewRemaining: 43)
+        XCTAssertEqual(d9.todayNew, 3)
+        XCTAssertEqual(plan.label, "期限型")
+        let old = #"[{"deckID":1,"unit":"chapters","amountPerPeriod":1,"periodDays":7,"startDay":3,"level":2}]"#.data(using: .utf8)!
+        XCTAssertFalse(try JSONDecoder().decode([StudyPlan].self, from: old)[0].isDeadline)
+    }
+
     func testPlanWordsPerDayCatchesUp() {
         let plan = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 30, periodDays: 1, startDay: 5)
         let s0 = PlanEngine.status(plan: plan, today: 5, chapters: [], deckTotal: 100, deckNewRemaining: 100)

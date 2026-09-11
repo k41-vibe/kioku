@@ -212,6 +212,83 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertEqual(stats.revlog.count, 1)
     }
 
+    // MARK: - Plans
+
+    private func chapters(_ sizes: [(Int, Int)]) -> [PlanChapter] {
+        sizes.enumerated().map { i, s in PlanChapter(deckID: Int64(100 + i), name: "D::\(i + 1)", total: s.0, newRemaining: s.1) }
+    }
+
+    func testPlanChaptersPerWeekSpreadsAcrossDays() {
+        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 7, startDay: 10)
+        let ch = chapters([(14, 14), (14, 14), (14, 14)])
+        let d0 = PlanEngine.status(plan: plan, today: 10, chapters: ch, deckTotal: 42, deckNewRemaining: 42)
+        XCTAssertEqual(d0.todayNew, 2)                 // 14 * (1/7) = 2
+        XCTAssertEqual(d0.chapterLimits[100], 2)
+        XCTAssertEqual(d0.chapterLimits[101], 0)
+        XCTAssertEqual(d0.currentChapterIndex, 0)
+        XCTAssertEqual(d0.daysLeftInPeriod, 7)
+        // day 6: whole first chapter should be in by tonight
+        let d6 = PlanEngine.status(plan: plan, today: 16, chapters: ch, deckTotal: 42, deckNewRemaining: 42)
+        XCTAssertEqual(d6.targetIntroducedByToday, 14)
+        XCTAssertEqual(d6.todayNew, 14)                // nothing studied yet -> catch up
+        XCTAssertEqual(d6.daysLeftInPeriod, 1)
+        // day 7 with chapter 1 done: chapter 2 opens, 2 cards
+        let ch2 = chapters([(14, 0), (14, 14), (14, 14)])
+        let d7 = PlanEngine.status(plan: plan, today: 17, chapters: ch2, deckTotal: 42, deckNewRemaining: 28)
+        XCTAssertEqual(d7.todayNew, 2)
+        XCTAssertEqual(d7.chapterLimits[100], PlanEngine.unlimited)
+        XCTAssertEqual(d7.chapterLimits[101], 2)
+        XCTAssertEqual(d7.currentChapterIndex, 1)
+        // ahead of schedule -> 0 today
+        let ahead = chapters([(14, 0), (14, 4), (14, 14)])
+        let dA = PlanEngine.status(plan: plan, today: 17, chapters: ahead, deckTotal: 42, deckNewRemaining: 18)
+        XCTAssertEqual(dA.todayNew, 0)
+    }
+
+    func testPlanStartChapterSkipsEarlierChapters() {
+        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 1, startDay: 0, startChapterIndex: 1)
+        let ch = chapters([(10, 10), (10, 10), (10, 10)])
+        let s = PlanEngine.status(plan: plan, today: 0, chapters: ch, deckTotal: 30, deckNewRemaining: 30)
+        XCTAssertEqual(s.chapterLimits[100], 0)
+        XCTAssertEqual(s.chapterLimits[101], PlanEngine.unlimited)
+        XCTAssertEqual(s.chapterLimits[102], 0)
+        XCTAssertEqual(s.totalInScope, 20)
+        XCTAssertEqual(s.todayNew, 10)
+        XCTAssertEqual(s.currentChapterIndex, 1)
+    }
+
+    func testPlanWordsPerDayCatchesUp() {
+        let plan = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 30, periodDays: 1, startDay: 5)
+        let s0 = PlanEngine.status(plan: plan, today: 5, chapters: [], deckTotal: 100, deckNewRemaining: 100)
+        XCTAssertEqual(s0.todayNew, 30)
+        let s2 = PlanEngine.status(plan: plan, today: 7, chapters: [], deckTotal: 100, deckNewRemaining: 60)
+        XCTAssertEqual(s2.todayNew, 50)                // target 90, 40 done
+        let end = PlanEngine.status(plan: plan, today: 20, chapters: [], deckTotal: 100, deckNewRemaining: 0)
+        XCTAssertTrue(end.finished)
+        XCTAssertEqual(end.todayNew, 0)
+    }
+
+    func testPlanAppliesDeckLimitsInBackend() throws {
+        let (did, _) = try addBasicNotes(deck: "P", count: 6)
+        for i in 1...2 {
+            let cid = try client.addDeck(named: "P::0\(i)")
+            let ids = try client.searchCards("deck:\"P\" -deck:\"P::*\"", orderSQL: "n.id asc, c.ord asc")
+            _ = try client.setDeck(cardIDs: Array(ids.prefix(3)), deckID: cid)
+        }
+        let tree = try client.deckTree()
+        let today = Int(try client.timingToday().daysElapsed)
+        let plan = StudyPlan(deckID: did, unit: .chapters, amountPerPeriod: 1, periodDays: 3, startDay: today)
+        try client.savePlans([plan])
+        XCTAssertEqual(try client.loadPlans(), [plan])
+        let status = try XCTUnwrap(try client.applyPlan(plan, tree: tree, today: today))
+        XCTAssertEqual(status.todayNew, 1)              // 3 * (1/3)
+        XCTAssertEqual(try client.currentNewLimit(deckID: did), 1)
+        let after = try XCTUnwrap(AnkiClient.find(did, in: try client.deckTree()))
+        XCTAssertEqual(after.newCount, 1, "deck tree must reflect the plan's limit")
+        try client.clearPlanLimits(plan, tree: tree)
+        XCTAssertNil(try client.currentNewLimit(deckID: did))
+    }
+
     func testBackendErrorIsDecoded() throws {
         XCTAssertThrowsError(try client.card(123456789)) { err in
             let e = err as? BackendError

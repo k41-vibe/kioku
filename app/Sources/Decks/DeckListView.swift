@@ -11,6 +11,11 @@ struct DeckListView: View {
     @State private var renameText = ""
     @State private var deleting: DeckTreeNode?
     @State private var confirmUndo = false
+    @State private var session: ReviewSession?
+
+    private var planStatuses: [PlanStatus] {
+        model.plans.compactMap { model.planStatuses[$0.deckID] }
+    }
 
     var body: some View {
         NavigationStack {
@@ -18,6 +23,16 @@ struct DeckListView: View {
                 if let tree = model.deckTree, !tree.children.isEmpty {
                     List {
                         if !model.pendingPackages.isEmpty { pendingSection }
+                        ForEach(planStatuses, id: \.plan.deckID) { status in
+                            PlanCardView(status: status) {
+                                session = model.normalSession(deckID: status.plan.deckID)
+                            } onDrill: { chapter in
+                                Task { session = await model.drillSession(deckID: chapter.deckID) }
+                            }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                        }
                         ForEach(tree.children, id: \.deckID) { node in
                             DeckRows(node: node, onRename: { renaming = $0; renameText = shortName($0.name) }, onDelete: { deleting = $0 })
                         }
@@ -63,6 +78,9 @@ struct DeckListView: View {
             }
             .sheet(isPresented: $showStats) { StatsView(search: "") }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .fullScreenCover(item: $session) { s in
+                NavigationStack { ReviewerView(session: s) }
+            }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):

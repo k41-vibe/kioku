@@ -8,6 +8,7 @@ struct DeckDetailView: View {
     @State private var showDrillSetup = false
     @State private var showSplit = false
     @State private var showStats = false
+    @State private var showPlan = false
     @State private var extendNew = 10
     @State private var busy = false
     @State private var description: String = ""
@@ -46,6 +47,21 @@ struct DeckDetailView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+                Section("ペース") {
+                    if let status = model.planStatuses[deckID] {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(status.plan.label + (status.currentChapter.map { " · 今は \(shortName($0.name))" } ?? ""))
+                                .font(.footnote)
+                            Text("今日の新規 \(status.todayNew) 枚 · 導入 \(status.introduced)/\(status.totalInScope)")
+                                .font(.caption).foregroundStyle(Theme.gray1)
+                        }
+                        Button { showPlan = true } label: { Label("ペースを変える / やめる", systemImage: "slider.horizontal.3") }
+                    } else {
+                        Button { showPlan = true } label: { Label("ペースを決める(1章/週 など)", systemImage: "calendar") }
+                        Text("章ごと、または単語数で毎日の新規枚数を自動で決めます。復習は忘却曲線どおりです。")
+                            .font(.caption2).foregroundStyle(Theme.gray2)
+                    }
                 }
                 Section("周回") {
                     Button {
@@ -102,6 +118,9 @@ struct DeckDetailView: View {
             ChapterSplitView(deckID: deckID, deckName: name)
         }
         .sheet(isPresented: $showStats) { StatsView(search: "deck:\"\(name)\"") }
+        .sheet(isPresented: $showPlan) {
+            PlanSetupView(deckID: deckID, deckName: name, hasChapters: !(node?.children.filter { !$0.filtered }.isEmpty ?? true))
+        }
     }
 
     private func stat(_ label: String, _ value: UInt32) -> some View {

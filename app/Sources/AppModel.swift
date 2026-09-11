@@ -36,6 +36,10 @@ final class AppModel {
     var redoLabel: String = ""
     /// .apkg files found in Documents (dropped there via the Files app).
     var pendingPackages: [URL] = []
+    /// Pacing plans (one per deck) and their status for today.
+    var plans: [StudyPlan] = []
+    var planStatuses: [Int64: PlanStatus] = [:]
+    var today: Int = 0
     /// Recent import diagnostics, newest last (shown in settings).
     var importLog: [String] = []
     /// URLs handed to us (share sheet / open-in) before the collection was ready.
@@ -107,13 +111,98 @@ final class AppModel {
     func refreshDecks() async {
         guard let client else { return }
         do {
-            let (tree, names, undo) = try await client.perform { c in
-                (try c.deckTree(), try c.deckNames(), try c.undoStatus())
+            let (tree, names, undo, timing, plans, statuses) = try await client.perform { c -> (DeckTreeNode, [Anki_Decks_DeckNameId], Anki_Collection_UndoStatus, Anki_Scheduler_SchedTimingTodayResponse, [StudyPlan], [Int64: PlanStatus]) in
+                let timing = try c.timingToday()
+                let today = Int(timing.daysElapsed)
+                var tree = try c.deckTree()
+                let plans = try c.loadPlans()
+                var statuses: [Int64: PlanStatus] = [:]
+                var changed = false
+                for plan in plans {
+                    if let s = try c.applyPlan(plan, tree: tree, today: today) {
+                        statuses[plan.deckID] = s
+                        changed = true
+                    }
+                }
+                if changed { tree = try c.deckTree() }   // counts reflect the new limits
+                return (tree, try c.deckNames(), try c.undoStatus(), timing, plans, statuses)
             }
             deckTree = tree
             deckNames = Dictionary(uniqueKeysWithValues: names.map { ($0.id, $0.name) })
             undoLabel = undo.undo
             redoLabel = undo.redo
+            today = Int(timing.daysElapsed)
+            self.plans = plans
+            planStatuses = statuses
+        } catch {
+            errorMessage = "\(error)"
+        }
+    }
+
+    // MARK: - Sessions
+
+    func normalSession(deckID: Int64) -> ReviewSession? {
+        guard let client else { return nil }
+        return ReviewSession(client: client, deckID: deckID, deckName: deckName(deckID), mode: .normal)
+    }
+
+    /// Build a preview-mode drill over `deckID` (all its cards, in added order).
+    func drillSession(deckID: Int64, includeNew: Bool = true, limit: UInt32 = 500,
+                      order: Anki_Decks_Deck.Filtered.SearchTerm.Order = .added) async -> ReviewSession? {
+        guard let client else { return nil }
+        let name = deckName(deckID)
+        let search = "deck:\"\(name)\"" + (includeNew ? "" : " -is:new")
+        let title = "周回: \(shortName(name))"
+        do {
+            let fid = try await client.perform { c in
+                if let old = try c.deckID(named: title) { _ = try c.removeDecks([old]) }
+                return try c.createFilteredDeck(name: title, search: search, limit: limit, order: order,
+                                                reschedule: false, previewAgainSecs: 60, previewHardSecs: 600, previewGoodSecs: 0)
+            }
+            return ReviewSession(client: client, deckID: deckID, deckName: name, mode: .drill(filteredDeckID: fid, title: title))
+        } catch {
+            errorMessage = "\(error)"
+            return nil
+        }
+    }
+
+    // MARK: - Plans
+
+    func plan(for deckID: Int64) -> StudyPlan? { plans.first { $0.deckID == deckID } }
+
+    func setPlan(_ plan: StudyPlan) async {
+        guard let client else { return }
+        var plan = plan
+        do {
+            try await client.perform { c in
+                var all = try c.loadPlans()
+                if let existing = all.first(where: { $0.deckID == plan.deckID }) {
+                    plan.previousNewLimit = existing.previousNewLimit
+                } else {
+                    plan.previousNewLimit = try c.currentNewLimit(deckID: plan.deckID)
+                }
+                all.removeAll { $0.deckID == plan.deckID }
+                all.append(plan)
+                try c.savePlans(all)
+            }
+            await refreshDecks()
+        } catch {
+            errorMessage = "\(error)"
+        }
+    }
+
+    func removePlan(deckID: Int64) async {
+        guard let client, let tree = deckTree else { return }
+        do {
+            try await client.perform { c in
+                var all = try c.loadPlans()
+                if let plan = all.first(where: { $0.deckID == deckID }) {
+                    try c.clearPlanLimits(plan, tree: tree)
+                }
+                all.removeAll { $0.deckID == deckID }
+                try c.savePlans(all)
+            }
+            await refreshDecks()
         } catch {
             errorMessage = "\(error)"
         }

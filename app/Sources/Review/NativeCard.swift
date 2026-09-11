@@ -32,6 +32,13 @@ struct NativeCard: Equatable {
     private static let readingNames = ["品詞", "発音", "読み", "reading", "pronunciation", "ipa", "pos", "part of speech"]
     private static let skipNames = ["id", "tags", "pic", "picture", "image", "画像", "番号", "no", "num"]
 
+    private static let avPattern = try! NSRegularExpression(pattern: #"\[sound:[^\]]+\]|\[anki:tts[^\]]*\].*?\[/anki:tts\]"#, options: [.dotMatchesLineSeparators])
+    /// Remove [sound:...] / tts tags (strip_html leaves them in place).
+    static func withoutAV(_ s: String) -> String {
+        let ns = s as NSString
+        return avPattern.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+    }
+
     private static func lower(_ s: String) -> String { s.lowercased() }
     private static func matches(_ name: String, _ list: [String]) -> Bool {
         let n = lower(name)
@@ -50,7 +57,7 @@ struct NativeCard: Equatable {
         var used = Set<Int>()
 
         func text(_ i: Int) -> String { i < note.fields.count ? note.fields[i] : "" }
-        func plain(_ i: Int) -> String { strip(text(i)).trimmingCharacters(in: .whitespacesAndNewlines) }
+        func plain(_ i: Int) -> String { withoutAV(strip(text(i))).trimmingCharacters(in: .whitespacesAndNewlines) }
 
         // Audio: any field carrying [sound:] tags. Word audio = names mentioning 単語/word/audio/sound without 例文.
         for (i, name) in names.enumerated() {
@@ -62,7 +69,7 @@ struct NativeCard: Equatable {
                 if isExample { card.exampleAudio.append(a) } else { card.wordAudio.append(a) }
             }
             // A field that is *only* audio is consumed here.
-            if strip(text(i)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { used.insert(i) }
+            if plain(i).isEmpty { used.insert(i) }
         }
 
         // Word = sort field (first line). Remaining lines of that field become the example

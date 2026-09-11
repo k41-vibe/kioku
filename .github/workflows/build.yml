@@ -12,11 +12,7 @@ on:
         type: boolean
         default: true
   push:
-    branches: [main]
     tags: ["v*"]
-    paths-ignore:
-      - "README.md"
-      - "docs/**"
 
 concurrency:
   group: build-${{ github.ref }}

@@ -347,6 +347,22 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertNil(try client.currentNewLimit(deckID: did))
     }
 
+    func testFSRSToggle() throws {
+        XCTAssertFalse(try client.isFSRSEnabled(), "fresh collections default to SM-2")
+        let (did, _) = try addBasicNotes(deck: "F", count: 2)
+        try client.setFSRS(true)
+        XCTAssertTrue(try client.isFSRSEnabled())
+        try client.setCurrentDeck(did)
+        let q = try client.queuedCards(limit: 1)
+        let c = try XCTUnwrap(q.cards.first)
+        try client.answerCard(c, rating: .good, millisecondsTaken: 800)
+        let stats = try client.cardStats(c.card.id)
+        XCTAssertTrue(stats.hasMemoryState, "FSRS should record stability/difficulty")
+        XCTAssertGreaterThan(stats.memoryState.stability, 0)
+        try client.setFSRS(false)
+        XCTAssertFalse(try client.isFSRSEnabled())
+    }
+
     func testBackendErrorIsDecoded() throws {
         XCTAssertThrowsError(try client.card(123456789)) { err in
             let e = err as? BackendError

@@ -286,6 +286,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var mono = true
     @State private var extras = true
+    @State private var fsrs = false
+    @State private var fsrsLoaded = false
     @State private var checkResult: String?
     @State private var busy = false
     @State private var audioTester = CardAudioPlayer(mediaFolder: CollectionPaths.documents)
@@ -299,6 +301,28 @@ struct SettingsView: View {
                         .onChange(of: mono) { _, v in model.forceMonochrome = v }
                     Toggle("テンプレートに無いフィールドも答えの下に表示", isOn: $extras)
                         .onChange(of: extras) { _, v in UserDefaults.standard.set(v, forKey: "showExtraFields") }
+                }
+                Section("スケジューラ") {
+                    Toggle("FSRS を使う(推奨)", isOn: $fsrs)
+                        .disabled(!fsrsLoaded || busy)
+                        .onChange(of: fsrs) { old, v in
+                            guard fsrsLoaded, old != v else { return }
+                            busy = true
+                            Task {
+                                do {
+                                    try await model.client?.perform { c in try c.setFSRS(v) }
+                                    await model.refreshDecks()
+                                } catch {
+                                    model.errorMessage = "\(error)"
+                                    fsrs = old
+                                }
+                                busy = false
+                            }
+                        }
+                    Text(fsrs
+                         ? "本家 Anki の新方式。カードごとに安定度と難易度を推定し、目標保持率 90% で次回を決めます。"
+                         : "いまは従来方式(SM-2)。オンにすると FSRS に切り替わり、既存カードの記憶状態は履歴から再計算されます。")
+                        .font(.caption2).foregroundStyle(Theme.gray2)
                 }
                 Section("音声テスト") {
                     Button {
@@ -354,6 +378,12 @@ struct SettingsView: View {
             .onAppear {
                 mono = model.forceMonochrome
                 extras = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
+            }
+            .task {
+                if let on = try? await model.client?.perform({ c in try c.isFSRSEnabled() }) {
+                    fsrs = on
+                }
+                fsrsLoaded = true
             }
             .alert("結果", isPresented: Binding(get: { checkResult != nil }, set: { if !$0 { checkResult = nil } })) {
                 Button("OK") { checkResult = nil }

@@ -462,6 +462,76 @@ final class AnkiClient: @unchecked Sendable {
         return try backend.invoke(AnkiRPC.Stats.service, AnkiRPC.Stats.cardStats, req)
     }
 
+    // MARK: - Deck config / FSRS
+
+    func deckConfigsForUpdate(deckID: Int64) throws -> Anki_DeckConfig_DeckConfigsForUpdate {
+        var req = Anki_Decks_DeckId()
+        req.did = deckID
+        return try backend.invoke(AnkiRPC.DeckConfig.service, AnkiRPC.DeckConfig.getDeckConfigsForUpdate, req)
+    }
+
+    /// Whether the collection uses FSRS (the modern forgetting-curve scheduler).
+    func isFSRSEnabled() throws -> Bool {
+        try deckConfigsForUpdate(deckID: 1).fsrs
+    }
+
+    /// Turn FSRS on/off for the whole collection, keeping the current deck's
+    /// preset and limits untouched. Mirrors what the desktop deck-options
+    /// screen sends when you flip the FSRS switch.
+    func setFSRSEnabled(_ enabled: Bool, deckID: Int64 = 1) throws {
+        let info = try deckConfigsForUpdate(deckID: deckID)
+        guard let current = info.allConfig.first(where: { $0.config.id == info.currentDeck.configID })?.config
+                ?? info.allConfig.first?.config else {
+            throw BackendError(kind: .ffi, message: "デッキ設定が見つかりません")
+        }
+        var req = Anki_DeckConfig_UpdateDeckConfigsRequest()
+        req.targetDeckID = deckID
+        req.configs = [current]
+        req.mode = .normal
+        req.cardStateCustomizer = info.cardStateCustomizer
+        req.limits = info.currentDeck.limits
+        req.newCardsIgnoreReviewLimit = info.newCardsIgnoreReviewLimit
+        req.applyAllParentLimits = info.applyAllParentLimits
+        req.fsrs = enabled
+        req.fsrsReschedule = false
+        req.fsrsHealthCheck = false
+        try backend.invokeVoid(AnkiRPC.DeckConfig.service, AnkiRPC.DeckConfig.updateDeckConfigs, req)
+    }
+
+    // MARK: - Deck options / FSRS
+
+    func deckConfigsForUpdate(deckID: Int64) throws -> Anki_DeckConfig_DeckConfigsForUpdate {
+        var req = Anki_Decks_DeckId()
+        req.did = deckID
+        return try backend.invoke(AnkiRPC.DeckConfig.service, AnkiRPC.DeckConfig.getDeckConfigsForUpdate, req)
+    }
+
+    /// Whether FSRS (the modern scheduler) is on for this collection.
+    func isFSRSEnabled() throws -> Bool {
+        try deckConfigsForUpdate(deckID: 1).fsrs
+    }
+
+    /// Turn FSRS on/off collection-wide, keeping every deck on its current preset.
+    /// Goes through UpdateDeckConfigs like the desktop app does, so rslib also
+    /// recomputes memory states when switching on.
+    func setFSRS(_ enabled: Bool, deckID: Int64 = 1) throws {
+        let info = try deckConfigsForUpdate(deckID: deckID)
+        guard let current = info.allConfig.first(where: { $0.config.id == info.currentDeck.configID })?.config
+                ?? info.allConfig.first?.config else { return }
+        var req = Anki_DeckConfig_UpdateDeckConfigsRequest()
+        req.targetDeckID = deckID
+        req.configs = [current]
+        req.mode = .normal
+        req.limits = info.currentDeck.limits
+        req.cardStateCustomizer = info.cardStateCustomizer
+        req.newCardsIgnoreReviewLimit = info.newCardsIgnoreReviewLimit
+        req.applyAllParentLimits = info.applyAllParentLimits
+        req.fsrs = enabled
+        req.fsrsReschedule = false
+        req.fsrsHealthCheck = false
+        try backend.invokeVoid(AnkiRPC.DeckConfig.service, AnkiRPC.DeckConfig.updateDeckConfigs, req)
+    }
+
     // MARK: - Config
 
     func configJSON(_ key: String) throws -> Data? {

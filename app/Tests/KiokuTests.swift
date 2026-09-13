@@ -219,7 +219,7 @@ final class KiokuCoreTests: XCTestCase {
     }
 
     func testPlanChaptersPerWeekSpreadsAcrossDays() {
-        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 7, startDay: 10)
+        let plan = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 7, startDay: 10, carryOver: true)
         let ch = chapters([(14, 14), (14, 14), (14, 14)])
         let d0 = PlanEngine.status(plan: plan, today: 10, chapters: ch, deckTotal: 42, deckNewRemaining: 42)
         XCTAssertEqual(d0.todayNew, 2)                 // 14 * (1/7) = 2
@@ -288,6 +288,33 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertNil(decoded.first?.previousNewLimit)
     }
 
+    func testPlanWithoutCarryOverAsksTheSameEveryDay() {
+        // 20 words/day, nothing studied for a week: still 20 today, not 160.
+        let words = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 20, periodDays: 1, startDay: 0)
+        XCTAssertFalse(words.carryOver)
+        let d0 = PlanEngine.status(plan: words, today: 0, chapters: [], deckTotal: 200, deckNewRemaining: 200)
+        XCTAssertEqual(d0.todayNew, 20)
+        let d7 = PlanEngine.status(plan: words, today: 7, chapters: [], deckTotal: 200, deckNewRemaining: 200)
+        XCTAssertEqual(d7.todayNew, 20)
+        // near the end it never asks for more than what is left
+        let last = PlanEngine.status(plan: words, today: 30, chapters: [], deckTotal: 200, deckNewRemaining: 6)
+        XCTAssertEqual(last.todayNew, 6)
+        let done = PlanEngine.status(plan: words, today: 40, chapters: [], deckTotal: 200, deckNewRemaining: 0)
+        XCTAssertEqual(done.todayNew, 0)
+        XCTAssertTrue(done.finished)
+
+        // 1 chapter/week without carry-over: a fixed 1/7 of the current chapter, and
+        // the chapter pointer follows progress rather than the calendar.
+        let ch = chapters([(14, 0), (14, 14), (14, 14)])
+        let weekly = StudyPlan(deckID: 1, unit: .chapters, amountPerPeriod: 1, periodDays: 7, startDay: 0)
+        let w = PlanEngine.status(plan: weekly, today: 21, chapters: ch, deckTotal: 42, deckNewRemaining: 28)
+        XCTAssertEqual(w.todayNew, 2)                       // 14 * 1/7, not "3 weeks behind"
+        XCTAssertEqual(w.currentChapterIndex, 1)
+        XCTAssertEqual(w.chapterLimits[100], PlanEngine.unlimited)
+        XCTAssertEqual(w.chapterLimits[101], PlanEngine.unlimited)
+        XCTAssertEqual(w.chapterLimits[102], 0)
+    }
+
     func testPlanDeadlineSpreadsRemainingOverDaysLeft() throws {
         // one section of 81 cards, Friday (today=100) to Tuesday (104): 5 days -> 17/day
         let ch = chapters([(30, 0), (81, 81), (40, 40)])
@@ -312,11 +339,13 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertEqual(d9.todayNew, 3)
         XCTAssertEqual(plan.label, "期限型")
         let old = #"[{"deckID":1,"unit":"chapters","amountPerPeriod":1,"periodDays":7,"startDay":3,"level":2}]"#.data(using: .utf8)!
-        XCTAssertFalse(try JSONDecoder().decode([StudyPlan].self, from: old)[0].isDeadline)
+        let decodedOld = try JSONDecoder().decode([StudyPlan].self, from: old)[0]
+        XCTAssertFalse(decodedOld.isDeadline)
+        XCTAssertFalse(decodedOld.carryOver)
     }
 
     func testPlanWordsPerDayCatchesUp() {
-        let plan = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 30, periodDays: 1, startDay: 5)
+        let plan = StudyPlan(deckID: 1, unit: .words, amountPerPeriod: 30, periodDays: 1, startDay: 5, carryOver: true)
         let s0 = PlanEngine.status(plan: plan, today: 5, chapters: [], deckTotal: 100, deckNewRemaining: 100)
         XCTAssertEqual(s0.todayNew, 30)
         let s2 = PlanEngine.status(plan: plan, today: 7, chapters: [], deckTotal: 100, deckNewRemaining: 60)

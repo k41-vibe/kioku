@@ -82,6 +82,7 @@ struct PlanSetupView: View {
     @State private var customDays: Int = 14
     @State private var startDate: Date = Date()
     @State private var startChapter: Int = 0
+    @State private var carryOver = false
     @State private var mode: Int = 0            // 0 = pace, 1 = deadline
     @State private var endChapter: Int = 0
     @State private var endDate: Date = Calendar.current.date(byAdding: .day, value: 4, to: Date()) ?? Date()
@@ -171,6 +172,11 @@ struct PlanSetupView: View {
                     if periodChoice == 0 {
                         Stepper("\(customDays) 日ごと", value: $customDays, in: 2...90)
                     }
+                    Toggle("やらなかった分を翌日に繰り越す", isOn: $carryOver)
+                    Text(carryOver
+                         ? "サボった日の分が翌日以降に上乗せされます。"
+                         : "毎日きっかり同じ量です。やらなかった日の分は積み上がりません。")
+                        .font(.caption2).foregroundStyle(Theme.gray2)
                     DatePicker("開始日", selection: $startDate, displayedComponents: .date)
                     if hasChapters {
                         Picker("開始する\(unitName)", selection: $startChapter) {
@@ -245,6 +251,7 @@ struct PlanSetupView: View {
             customDays = p.periodDays
             startDate = Calendar.current.date(byAdding: .day, value: p.startDay - model.today, to: Date()) ?? Date()
             level = p.level
+            carryOver = p.carryOver
             startChapter = p.startChapterIndex
             if let e = p.endDay {
                 mode = 1
@@ -261,7 +268,8 @@ struct PlanSetupView: View {
     private func save() async {
         let offset = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: startDate)).day ?? 0
         var plan = StudyPlan(deckID: deckID, unit: unit, amountPerPeriod: amount, periodDays: periodDays,
-                             startDay: model.today + offset, startChapterIndex: hasChapters ? startChapter : 0, level: level, previousNewLimit: nil)
+                             startDay: model.today + offset, startChapterIndex: hasChapters ? startChapter : 0, level: level,
+                             carryOver: carryOver, previousNewLimit: nil)
         if mode == 1 {
             let endOffset = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: endDate)).day ?? 0
             plan.unit = .chapters

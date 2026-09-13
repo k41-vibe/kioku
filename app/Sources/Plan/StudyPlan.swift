@@ -27,6 +27,9 @@ struct StudyPlan: Codable, Identifiable, Equatable {
     /// (inclusive). Daily new = remaining / days left, recomputed every day.
     var endDay: Int? = nil
     var endChapterIndex: Int? = nil
+    /// Pace mode: when true, days you skip pile onto the following days.
+    /// When false (default) every day asks for the same amount.
+    var carryOver: Bool = false
     /// Original per-deck new limit before the plan took over (nil = preset).
     var previousNewLimit: UInt32?
 
@@ -34,7 +37,8 @@ struct StudyPlan: Codable, Identifiable, Equatable {
     var isDeadline: Bool { endDay != nil }
 
     init(deckID: Int64, unit: Unit, amountPerPeriod: Double, periodDays: Int, startDay: Int,
-         startChapterIndex: Int = 0, level: Int = 1, endDay: Int? = nil, endChapterIndex: Int? = nil, previousNewLimit: UInt32? = nil) {
+         startChapterIndex: Int = 0, level: Int = 1, endDay: Int? = nil, endChapterIndex: Int? = nil,
+         carryOver: Bool = false, previousNewLimit: UInt32? = nil) {
         self.deckID = deckID
         self.unit = unit
         self.amountPerPeriod = amountPerPeriod
@@ -44,11 +48,12 @@ struct StudyPlan: Codable, Identifiable, Equatable {
         self.level = level
         self.endDay = endDay
         self.endChapterIndex = endChapterIndex
+        self.carryOver = carryOver
         self.previousNewLimit = previousNewLimit
     }
 
     private enum CodingKeys: String, CodingKey {
-        case deckID, unit, amountPerPeriod, periodDays, startDay, startChapterIndex, level, endDay, endChapterIndex, previousNewLimit
+        case deckID, unit, amountPerPeriod, periodDays, startDay, startChapterIndex, level, endDay, endChapterIndex, carryOver, previousNewLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -62,6 +67,7 @@ struct StudyPlan: Codable, Identifiable, Equatable {
         level = try c.decodeIfPresent(Int.self, forKey: .level) ?? 1
         endDay = try c.decodeIfPresent(Int.self, forKey: .endDay)
         endChapterIndex = try c.decodeIfPresent(Int.self, forKey: .endChapterIndex)
+        carryOver = try c.decodeIfPresent(Bool.self, forKey: .carryOver) ?? false
         previousNewLimit = try c.decodeIfPresent(UInt32.self, forKey: .previousNewLimit)
     }
 
@@ -151,10 +157,19 @@ enum PlanEngine {
 
         switch plan.unit {
         case .words:
-            let target = min(Int((plan.perDay * Double(day + 1)).rounded(.up)), scopeTotal)
-            let todayNew = max(target - scopeIntroduced, 0)
             for ch in scope { limits[ch.deckID] = unlimited }
             let current = scope.firstIndex { $0.newRemaining > 0 }.map { $0 + start }
+            let remaining = max(scopeTotal - scopeIntroduced, 0)
+            let target: Int
+            let todayNew: Int
+            if plan.carryOver {
+                target = min(Int((plan.perDay * Double(day + 1)).rounded(.up)), scopeTotal)
+                todayNew = max(target - scopeIntroduced, 0)
+            } else {
+                // Same amount every day; skipped days never pile up.
+                todayNew = min(Int(plan.perDay.rounded(.up)), remaining)
+                target = scopeIntroduced + todayNew
+            }
             return PlanStatus(plan: plan, dayIndex: day, targetIntroducedByToday: target, introduced: scopeIntroduced,
                               totalInScope: scopeTotal, todayNew: todayNew, currentChapterIndex: current,
                               chapters: chapters, chapterLimits: limits, daysLeftInPeriod: daysLeftInPeriod)
@@ -165,6 +180,20 @@ enum PlanEngine {
                                   totalInScope: scopeTotal, todayNew: 0, currentChapterIndex: nil,
                                   chapters: chapters, chapterLimits: limits, daysLeftInPeriod: daysLeftInPeriod)
             }
+            if !plan.carryOver {
+                // Progress-driven: walk the chapters in order, a fixed share of one
+                // chapter per day. Skipped days do not pile up.
+                let currentInScope = scope.firstIndex { $0.newRemaining > 0 } ?? (scope.count - 1)
+                for (i, ch) in scope.enumerated() { limits[ch.deckID] = i <= currentInScope ? unlimited : 0 }
+                let chapter = scope[currentInScope]
+                let remaining = max(scopeTotal - scopeIntroduced, 0)
+                let todayNew = min(Int((Double(chapter.total) * plan.perDay).rounded(.up)), remaining)
+                return PlanStatus(plan: plan, dayIndex: day, targetIntroducedByToday: scopeIntroduced + todayNew,
+                                  introduced: scopeIntroduced, totalInScope: scopeTotal, todayNew: todayNew,
+                                  currentChapterIndex: currentInScope + start, chapters: chapters,
+                                  chapterLimits: limits, daysLeftInPeriod: daysLeftInPeriod)
+            }
+
             // Cumulative chapters (within scope) that should be introduced by the end of today.
             let f = min(plan.perDay * Double(day + 1), Double(scope.count))
             let full = Int(f.rounded(.down))

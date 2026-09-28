@@ -16,9 +16,17 @@ struct NativeCardPage: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            questionBlock
-                .frame(width: nil, height: height)
-                .offset(y: -progress * questionLift)
+            // The question slides up behind the toolbar when the answer opens, so
+            // fade its top edge. The mask sits on the page (not on the moving
+            // block) so the text dissolves as it travels into the strip.
+            Color.clear
+                .frame(height: height)
+                .overlay(
+                    questionBlock
+                        .frame(width: nil, height: height)
+                        .offset(y: -progress * questionLift)
+                )
+                .mask(topFade)
             answerPanel
                 .frame(height: answerHeight)
                 .offset(y: height - progress * answerHeight)
@@ -27,6 +35,17 @@ struct NativeCardPage: View {
         .frame(height: height)
         .clipped()
         .contentShape(Rectangle())
+    }
+
+    /// Clear at the very top, solid below the toolbar strip. Only bites while the
+    /// block is lifted — at rest the question sits in the middle of the page.
+    private var topFade: some View {
+        LinearGradient(stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .black.opacity(0.15), location: 0.045),
+            .init(color: .black, location: 0.105),
+            .init(color: .black, location: 1),
+        ], startPoint: .top, endPoint: .bottom)
     }
 
     private var questionBlock: some View {

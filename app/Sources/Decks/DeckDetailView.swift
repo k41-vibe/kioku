@@ -9,7 +9,7 @@ struct DeckDetailView: View {
     @State private var showSplit = false
     @State private var showStats = false
     @State private var showPlan = false
-    @State private var confirmReset = false
+    @State private var showReset = false
     @State private var extendNew = 10
     @State private var busy = false
     @State private var description: String = ""
@@ -100,7 +100,7 @@ struct DeckDetailView: View {
                         }
                     } label: { Label("埋めたカードを戻す", systemImage: "tray.and.arrow.up") }
                     Button { showStats = true } label: { Label("このデッキの統計", systemImage: "chart.bar") }
-                    Button(role: .destructive) { confirmReset = true } label: { Label("学習をリセット(全部新規に戻す)", systemImage: "arrow.counterclockwise") }
+                    Button(role: .destructive) { showReset = true } label: { Label("学習をリセット(全部 / 範囲を選ぶ)", systemImage: "arrow.counterclockwise") }
                 }
             } else {
                 Text("デッキが見つかりません").foregroundStyle(Theme.gray1)
@@ -122,23 +122,8 @@ struct DeckDetailView: View {
             ChapterSplitView(deckID: deckID, deckName: name)
         }
         .sheet(isPresented: $showStats) { StatsView(search: "deck:\"\(name)\"") }
-        .confirmationDialog("「\(shortName(name))」の全カードを新規に戻しますか?", isPresented: $confirmReset, titleVisibility: .visible) {
-            Button("新規に戻す(履歴は残ります)", role: .destructive) {
-                busy = true
-                Task {
-                    let n = name
-                    do {
-                        try await model.client?.perform { c in
-                            let ids = try c.searchCards("deck:\"\(n)\"")
-                            if !ids.isEmpty { try c.forgetCards(ids) }
-                        }
-                    } catch { model.errorMessage = "\(error)" }
-                    await model.refreshDecks()
-                    busy = false
-                }
-            }
-        } message: {
-            Text("復習の予定と間隔が消え、最初から出題されます。取り消しはデッキ一覧の履歴メニューからできます。")
+        .sheet(isPresented: $showReset) {
+            ResetScopeView(deckID: deckID, deckName: name)
         }
         .sheet(isPresented: $showPlan) {
             PlanSetupView(deckID: deckID, deckName: name,

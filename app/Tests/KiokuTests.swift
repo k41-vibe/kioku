@@ -427,6 +427,58 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertEqual(c2.wordAudio.count, 1)
     }
 
+    func testLooksLikeCode() {
+        XCTAssertTrue(NativeCard.looksLikeCode("p1q5_0002"))
+        XCTAssertTrue(NativeCard.looksLikeCode("0049"))
+        XCTAssertTrue(NativeCard.looksLikeCode("p1q5"))
+        XCTAssertFalse(NativeCard.looksLikeCode("affect"), "a plain word is not an id")
+        XCTAssertFalse(NativeCard.looksLikeCode("win32"), "one letter run then digits is a word")
+        XCTAssertFalse(NativeCard.looksLikeCode("COVID-19"))
+        XCTAssertFalse(NativeCard.looksLikeCode("a few minutes 3"), "phrases are never ids")
+        XCTAssertFalse(NativeCard.looksLikeCode(""))
+    }
+
+    /// The deck sorts by an id field, so the headword must come from 単語 and
+    /// every later slot must shift back: 意味 is the meaning, not an extra.
+    func testNativeCardSkipsIDSortFieldAsHeadword() throws {
+        var nt = Anki_Notetypes_Notetype()
+        for name in ["ID", "単語", "品詞", "意味", "例文", "例文意味"] {
+            var f = Anki_Notetypes_Notetype.Field(); f.name = name; nt.fields.append(f)
+        }
+        nt.config.sortFieldIdx = 0      // the id is the sort field
+        var note = Anki_Notes_Note()
+        note.fields = ["p1q5_0002", "affect", "動詞", "に影響を及ぼす",
+                       "Scientists are studying how air pollution affects children's health.",
+                       "科学者は大気汚染が子供たちの健康にいかに影響を及ぼすのかを研究している。"]
+        let card = try XCTUnwrap(NativeCard.build(note: note, notetype: nt, memoField: "メモ",
+                                                  strip: { try! self.client.stripHTML($0) },
+                                                  avTags: { try! self.client.extractAVTags($0, questionSide: true).avTags }))
+        XCTAssertEqual(card.word, "affect", "the id must never be the headword")
+        XCTAssertEqual(card.reading, "動詞")
+        XCTAssertEqual(card.meaning, ["に影響を及ぼす"])
+        XCTAssertTrue(card.example.hasPrefix("Scientists"))
+        XCTAssertTrue(card.exampleMeaning.hasPrefix("科学者"))
+        XCTAssertTrue(card.extras.isEmpty, "nothing is pushed down into the extras list")
+    }
+
+    /// Same id sort field, but no field is named 単語: the first leftover is
+    /// promoted to the headword rather than the id.
+    func testNativeCardPromotesLeftoverWhenSortFieldIsAnID() throws {
+        var nt = Anki_Notetypes_Notetype()
+        for name in ["Key", "Front", "Back"] {
+            var f = Anki_Notetypes_Notetype.Field(); f.name = name; nt.fields.append(f)
+        }
+        nt.config.sortFieldIdx = 0
+        var note = Anki_Notes_Note()
+        note.fields = ["p3q1_0117", "abridge", "短縮する"]
+        let card = try XCTUnwrap(NativeCard.build(note: note, notetype: nt, memoField: "メモ",
+                                                  strip: { try! self.client.stripHTML($0) },
+                                                  avTags: { try! self.client.extractAVTags($0, questionSide: true).avTags }))
+        XCTAssertEqual(card.word, "abridge")
+        XCTAssertEqual(card.meaning, ["短縮する"])
+        XCTAssertTrue(card.extras.isEmpty)
+    }
+
     func testBackendErrorIsDecoded() throws {
         XCTAssertThrowsError(try client.card(123456789)) { err in
             let e = err as? BackendError
@@ -444,5 +496,137 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertNil(handler.resolve(path: "/../collection.anki2"))
         XCTAssertNil(handler.resolve(path: "/sub/x.png"))
         XCTAssertNil(handler.resolve(path: "/"))
+    }
+
+    // MARK: - Shorts break
+
+    func testShortsDurationParsing() {
+        XCTAssertEqual(ShortsBreak.durationSeconds("PT58S"), 58)
+        XCTAssertEqual(ShortsBreak.durationSeconds("PT1M2S"), 62)
+        XCTAssertEqual(ShortsBreak.durationSeconds("PT1H2M3S"), 3723)
+        XCTAssertEqual(ShortsBreak.durationSeconds("PT2M"), 120)
+        XCTAssertNil(ShortsBreak.durationSeconds("P1DT5S"), "day durations are not handled")
+        XCTAssertNil(ShortsBreak.durationSeconds("PT12"), "a trailing number has no unit")
+        XCTAssertNil(ShortsBreak.durationSeconds("58S"))
+    }
+
+    func testShortsKeepsOnlyShortClips() throws {
+        let json = """
+        {"items":[
+          {"id":"aaa","contentDetails":{"duration":"PT45S"}},
+          {"id":"bbb","contentDetails":{"duration":"PT3M10S"}},
+          {"id":"ccc","contentDetails":{"duration":"PT1M"}},
+          {"id":"ddd"},
+          {"id":"eee","contentDetails":{"duration":"PT0S"}}
+        ]}
+        """.data(using: .utf8)!
+        XCTAssertEqual(try ShortsBreak.shortIDs(json), ["aaa", "ccc"],
+                       "over a minute, missing details and zero length are all dropped")
+    }
+
+    func testShortsFeedIDsKeepOrderAndDropDuplicates() {
+        let html = """
+        <script>var ytInitialData = {"a":{"videoId":"aaaaaaaaaaa"},
+        "b":{"videoId":"bbbbbbbbbbb"},"c":{"videoId":"aaaaaaaaaaa"},
+        "d":{"videoId":"tooshort"},"e":{"videoId":"ccccccccccc"}};</script>
+        """
+        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html),
+                       ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"],
+                       "first-seen order, no repeats, ids are always 11 characters")
+        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html, limit: 2), ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+        XCTAssertTrue(ShortsBreak.feedIDs(inHTML: "<html>signed out</html>").isEmpty)
+    }
+
+    func testShortsURLsNeedAKey() throws {
+        XCTAssertNil(ShortsBreak.trendingURL(apiKey: "", region: "JP"))
+        let url = try XCTUnwrap(ShortsBreak.trendingURL(apiKey: "k123", region: "JP"))
+        let query = try XCTUnwrap(url.query)
+        XCTAssertTrue(query.contains("chart=mostPopular"))
+        XCTAssertTrue(query.contains("regionCode=JP"))
+        XCTAssertEqual(ShortsBreak.embedURL("abc")?.absoluteString,
+                       "https://www.youtube.com/embed/abc?playsinline=1&autoplay=1&rel=0")
+    }
+
+    // MARK: - Reset
+
+    func testResetScopeSliceClamps() {
+        let ids: [Int64] = [10, 20, 30, 40, 50]
+        XCTAssertEqual(ResetScope.slice(ids, from: 2, to: 4), [20, 30, 40])
+        XCTAssertEqual(ResetScope.slice(ids, from: 1, to: 1), [10])
+        XCTAssertEqual(ResetScope.slice(ids, from: 0, to: 99), ids, "out-of-range ends clamp to the deck")
+        XCTAssertEqual(ResetScope.slice(ids, from: 4, to: 2), [], "an inverted range selects nothing")
+        XCTAssertEqual(ResetScope.slice(ids, from: 6, to: 9), [], "a range past the end selects nothing")
+        XCTAssertEqual(ResetScope.slice([], from: 1, to: 3), [])
+    }
+
+    func testResetScopeSearchQuotesAndCombines() {
+        XCTAssertEqual(ResetScope.studiedSearch(deckNames: ["鉄壁::01"]), "deck:\"鉄壁::01\" -is:new")
+        XCTAssertEqual(ResetScope.studiedSearch(deckNames: ["a", "b"]), "(deck:\"a\" or deck:\"b\") -is:new")
+        XCTAssertNil(ResetScope.studiedSearch(deckNames: []))
+        XCTAssertEqual(ResetScope.quoted("a\"b"), "deck:\"a\\\"b\"")
+        XCTAssertEqual(ResetScope.quoted("a\\b"), "deck:\"a\\\\b\"")
+    }
+
+    /// The range reset must send back exactly the studied cards inside the
+    /// chosen numbers, and leave everything else alone.
+    func testResetRangeForgetsOnlyStudiedCardsInRange() throws {
+        let deck = "範囲リセット"
+        let (did, _) = try addBasicNotes(deck: deck, count: 6)
+        try client.setCurrentDeck(did)
+
+        // Easy graduates a new card straight to review, so each pass of the loop
+        // gets a fresh card instead of one coming back in a learning step.
+        var answered = 0
+        while answered < 4 {
+            let q = try client.queuedCards(limit: 1)
+            guard let c = q.cards.first else { break }
+            try client.answerCard(c, rating: .easy, millisecondsTaken: 500)
+            answered += 1
+        }
+        XCTAssertEqual(answered, 4)
+
+        let ordered = try client.searchCards("deck:\"\(deck)\"", orderSQL: "n.id asc, c.ord asc")
+        XCTAssertEqual(ordered.count, 6)
+        let studied = Set(try client.searchCards(ResetScope.studiedSearch(deckNames: [deck])!))
+        XCTAssertEqual(studied.count, 4, "four cards should now be out of the new queue")
+
+        // Reset only cards 2 and 3.
+        let target = ResetScope.slice(ordered, from: 2, to: 3).filter { studied.contains($0) }
+        XCTAssertEqual(target, [ordered[1], ordered[2]])
+        try client.forgetCards(target)
+
+        let after = Set(try client.searchCards(ResetScope.studiedSearch(deckNames: [deck])!))
+        XCTAssertEqual(after.count, 2)
+        XCTAssertFalse(after.contains(ordered[1]))
+        XCTAssertFalse(after.contains(ordered[2]))
+        XCTAssertTrue(after.contains(ordered[0]), "cards before the range are untouched")
+        XCTAssertTrue(after.contains(ordered[3]), "cards after the range are untouched")
+        XCTAssertEqual(try client.searchCards("deck:\"\(deck)\"").count, 6, "nothing is deleted")
+    }
+
+    /// Selecting a chapter also covers the sections inside it.
+    func testResetChapterScopeCoversSections() throws {
+        _ = try addBasicNotes(deck: "章リセット::01::01", count: 2)
+        _ = try addBasicNotes(deck: "章リセット::02", count: 2, prefix: "x")
+        let parent = try XCTUnwrap(try client.deckID(named: "章リセット"))
+        try client.setCurrentDeck(parent)
+
+        var answered = 0
+        while answered < 4 {
+            let q = try client.queuedCards(limit: 1)
+            guard let c = q.cards.first else { break }
+            try client.answerCard(c, rating: .easy, millisecondsTaken: 500)
+            answered += 1
+        }
+        XCTAssertEqual(answered, 4)
+
+        let search = try XCTUnwrap(ResetScope.studiedSearch(deckNames: ["章リセット::01"]))
+        let inChapter = try client.searchCards(search)
+        XCTAssertEqual(inChapter.count, 2, "the parent chapter picks up its section")
+        try client.forgetCards(inChapter)
+
+        XCTAssertEqual(try client.searchCards(search).count, 0)
+        XCTAssertEqual(try client.searchCards(ResetScope.studiedSearch(deckNames: ["章リセット::02"])!).count, 2,
+                       "the chapter that was not selected keeps its progress")
     }
 }

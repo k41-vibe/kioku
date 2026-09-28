@@ -20,6 +20,11 @@ struct ReviewerView: View {
     /// Native layout: how far the answer panel is pulled up (0...1).
     @State private var reveal: CGFloat = 0
     @State private var dragging = false
+    /// Shorts break: ids fetched once per session, and the count at the last break
+    /// (so undo lowering `answeredCount` cannot trigger the same break again).
+    @State private var shortIDs: [String] = []
+    @State private var breakVideo: ShortVideo?
+    @State private var lastBreakAt = 0
 
     private enum PageID: Int { case previous = 0, question = 1, answer = 2, next = 3 }
 
@@ -34,6 +39,18 @@ struct ReviewerView: View {
         .task {
             session.night = colorScheme == .dark
             await session.start()
+        }
+        .task {
+            if ShortsBreak.every > 0 { shortIDs = await ShortsBreak.fetchBreakIDs() }
+        }
+        .onChange(of: session.answeredCount) { _, count in
+            let every = ShortsBreak.every
+            guard every > 0, !shortIDs.isEmpty, count >= lastBreakAt + every else { return }
+            lastBreakAt = count
+            breakVideo = shortIDs.randomElement().map(ShortVideo.init(id:))
+        }
+        .fullScreenCover(item: $breakVideo) { video in
+            ShortsBreakView(videoID: video.id) { breakVideo = nil }
         }
         .onChange(of: colorScheme) { _, new in session.night = new == .dark }
         .onChange(of: session.generation) { _, _ in

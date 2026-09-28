@@ -286,6 +286,11 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var mono = true
     @State private var extras = true
+    @State private var shortsEvery = 3
+    @State private var youtubeKey = ""
+    @State private var shortsRegion = "JP"
+    @State private var youtubeCookie = ""
+    @State private var updateCheck = ""
     @State private var nativeLayout = true
     @State private var fsrs = false
     @State private var fsrsLoaded = false
@@ -305,6 +310,21 @@ struct SettingsView: View {
                     Text("オフにするとデッキ作者の HTML テンプレートをそのまま表示します。").font(.caption2).foregroundStyle(Theme.gray2)
                     Toggle("テンプレートに無いフィールドも答えの下に表示", isOn: $extras)
                         .onChange(of: extras) { _, v in UserDefaults.standard.set(v, forKey: "showExtraFields") }
+                }
+                Section("休憩のショート動画") {
+                    Stepper(shortsEvery == 0 ? "使わない" : "\(shortsEvery) 枚ごとに1本", value: $shortsEvery, in: 0...20)
+                        .onChange(of: shortsEvery) { _, v in UserDefaults.standard.set(v, forKey: ShortsBreak.everyKey) }
+                    SecureField("YouTube の Cookie(空なら急上昇を使う)", text: $youtubeCookie)
+                        .onChange(of: youtubeCookie) { _, v in CookieStore.save(v) }
+                    Text("パソコンのブラウザで YouTube にログインし、開発者ツールの Network から youtube.com 宛ての Cookie 行をそのまま貼ります。自分のおすすめから出せますが、YouTube の規約は自動的な取得を禁じています。Google アカウントごと停止される可能性を承知の上で使ってください。Cookie はキーチェーンに保存します。")
+                        .font(.caption2).foregroundStyle(Theme.gray2)
+                    SecureField("YouTube API キー(Cookie を使わないとき)", text: $youtubeKey)
+                        .onChange(of: youtubeKey) { _, v in UserDefaults.standard.set(v, forKey: ShortsBreak.apiKeyKey) }
+                    TextField("地域コード(JP など)", text: $shortsRegion)
+                        .textInputAutocapitalization(.characters)
+                        .onChange(of: shortsRegion) { _, v in UserDefaults.standard.set(v, forKey: ShortsBreak.regionKey) }
+                    Text("こちらは急上昇の中から60秒以内のものを選ぶ方法で、規約の範囲内です。視聴履歴は反映されません。Cookie もキーも空のときは再生しません。")
+                        .font(.caption2).foregroundStyle(Theme.gray2)
                 }
                 Section("スケジューラ") {
                     Toggle("FSRS を使う(推奨)", isOn: $fsrs)
@@ -371,6 +391,17 @@ struct SettingsView: View {
                     }
                 }
                 Section("このアプリ") {
+                    Button {
+                        updateCheck = "確認しています…"
+                        Task {
+                            await model.checkForUpdate(force: true)
+                            updateCheck = model.availableUpdate.map { "新しい版 \($0.tag) があります。デッキ一覧に更新の案内が出ます。" }
+                                ?? "最新です(\(Updater.currentVersion))"
+                        }
+                    } label: { Label("更新を確認", systemImage: "arrow.down.circle") }
+                    if !updateCheck.isEmpty {
+                        Text(updateCheck).font(.caption2).foregroundStyle(Theme.gray1)
+                    }
                     Text("Kioku は Anki の Rust コア(rslib)をそのまま組み込んでいます。スケジューリング(FSRS / SM-2)、.apkg 取り込み、カード描画、統計はすべて本家と同じコードで動きます。")
                         .font(.footnote).foregroundStyle(Theme.gray1)
                     Text(AppInfo.footer + " · AGPL-3.0").font(.caption2).foregroundStyle(Theme.gray2)
@@ -382,6 +413,10 @@ struct SettingsView: View {
             .onAppear {
                 mono = model.forceMonochrome
                 extras = UserDefaults.standard.object(forKey: "showExtraFields") as? Bool ?? true
+                shortsEvery = ShortsBreak.every
+                youtubeKey = ShortsBreak.apiKey
+                shortsRegion = ShortsBreak.region
+                youtubeCookie = CookieStore.load()
                 nativeLayout = UserDefaults.standard.object(forKey: "nativeLayout") as? Bool ?? true
             }
             .task {

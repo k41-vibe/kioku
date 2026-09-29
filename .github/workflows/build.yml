@@ -177,8 +177,11 @@ jobs:
             # Untagged build. Date-based versions sort below the releases they are
             # newer than ("0.0.20260928" < "0.1.0"), which made the app offer an
             # older release as an update. Extend the newest tag instead.
+            # `git describe` needs the tag to be an ancestor of HEAD, which it is
+            # not in a shallow checkout, so pick the highest tag by version order.
             git fetch --depth=1 origin '+refs/tags/*:refs/tags/*' || true
-            BASE="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+            BASE="$(git tag --sort=-v:refname | head -1)"
+            [ -n "$BASE" ] || BASE="v0.0.0"
             V="${BASE#v}.${{ github.run_number }}"
           fi
           echo "marketing=$V" >> "$GITHUB_OUTPUT"

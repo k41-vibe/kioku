@@ -290,6 +290,7 @@ struct SettingsView: View {
     @State private var youtubeKey = ""
     @State private var shortsRegion = "JP"
     @State private var youtubeCookie = ""
+    @State private var shortsProbe = ""
     @State private var updateCheck = ""
     @State private var nativeLayout = true
     @State private var fsrs = false
@@ -325,6 +326,23 @@ struct SettingsView: View {
                         .onChange(of: shortsRegion) { _, v in UserDefaults.standard.set(v, forKey: ShortsBreak.regionKey) }
                     Text("こちらは急上昇の中から60秒以内のものを選ぶ方法で、規約の範囲内です。視聴履歴は反映されません。Cookie もキーも空のときは再生しません。")
                         .font(.caption2).foregroundStyle(Theme.gray2)
+                    Button {
+                        shortsProbe = "取得しています…"
+                        Task {
+                            let personal = await ShortsBreak.fetchPersonalIDs()
+                            if !personal.isEmpty {
+                                shortsProbe = "Cookie から \(personal.count) 件"
+                            } else {
+                                let trending = await ShortsBreak.fetchIDs()
+                                shortsProbe = trending.isEmpty
+                                    ? "0 件。Cookie もキーも通っていません"
+                                    : "急上昇から \(trending.count) 件(Cookie は通っていません)"
+                            }
+                        }
+                    } label: { Label("取得を試す", systemImage: "arrow.clockwise") }
+                    if !shortsProbe.isEmpty {
+                        Text(shortsProbe).font(.caption2).foregroundStyle(Theme.gray1)
+                    }
                 }
                 Section("スケジューラ") {
                     Toggle("FSRS を使う(推奨)", isOn: $fsrs)

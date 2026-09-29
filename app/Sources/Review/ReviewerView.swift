@@ -19,7 +19,11 @@ struct ReviewerView: View {
     @State private var memoDraft = ""
     /// Shorts break: ids fetched once per session, and the count at the last break
     /// (so undo lowering `answeredCount` cannot trigger the same break again).
+    /// Shuffled once, then used in order, so two breaks in a row never repeat
+    /// while any unseen video is left. Picking at random replayed the same one
+    /// whenever the pool was small.
     @State private var shortIDs: [String] = []
+    @State private var nextShort = 0
     @State private var breakVideo: ShortVideo?
     @State private var lastBreakAt = 0
 
@@ -38,13 +42,17 @@ struct ReviewerView: View {
             await session.start()
         }
         .task {
-            if ShortsBreak.every > 0 { shortIDs = await ShortsBreak.fetchBreakIDs() }
+            if ShortsBreak.every > 0 {
+                shortIDs = await ShortsBreak.fetchBreakIDs().shuffled()
+                nextShort = 0
+            }
         }
         .onChange(of: session.answeredCount) { _, count in
             let every = ShortsBreak.every
             guard every > 0, !shortIDs.isEmpty, count >= lastBreakAt + every else { return }
             lastBreakAt = count
-            breakVideo = shortIDs.randomElement().map(ShortVideo.init(id:))
+            breakVideo = ShortVideo(id: shortIDs[nextShort % shortIDs.count])
+            nextShort += 1
         }
         .fullScreenCover(item: $breakVideo) { video in
             ShortsBreakView(videoID: video.id) { breakVideo = nil }

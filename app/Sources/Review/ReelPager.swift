@@ -1,6 +1,9 @@
 import SwiftUI
 import UIKit
 
+/// File scope: a nested type of a generic cannot hold a static stored property.
+private let reelCellID = "reel"
+
 /// A vertical, full-page pager backed by `UICollectionView`.
 ///
 /// The SwiftUI `ScrollView` version fought the reveal drag: both claimed the
@@ -39,7 +42,7 @@ struct ReelPager<Page: View>: UIViewRepresentable {
         view.backgroundColor = .clear
         view.dataSource = context.coordinator
         view.delegate = context.coordinator
-        view.register(UICollectionViewCell.self, forCellWithReuseIdentifier: Coordinator.cellID)
+        view.register(UICollectionViewCell.self, forCellWithReuseIdentifier: reelCellID)
         context.coordinator.view = view
         return view
     }
@@ -70,7 +73,6 @@ struct ReelPager<Page: View>: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-        static let cellID = "reel"
         var parent: ReelPager
         weak var view: UICollectionView?
         var slotIDs: [String]
@@ -95,7 +97,7 @@ struct ReelPager<Page: View>: UIViewRepresentable {
         }
 
         func collectionView(_ view: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-            let cell = view.dequeueReusableCell(withReuseIdentifier: Self.cellID, for: indexPath)
+            let cell = view.dequeueReusableCell(withReuseIdentifier: reelCellID, for: indexPath)
             cell.contentConfiguration = UIHostingConfiguration { parent.page(indexPath.item) }
                 .margins(.all, 0)
             cell.backgroundColor = .clear

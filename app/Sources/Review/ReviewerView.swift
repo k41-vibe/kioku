@@ -9,7 +9,7 @@ struct ReviewerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(AppModel.self) private var model
     @State var session: ReviewSession
-    @State private var page: Int? = 1
+    @State private var slot: PageID = .question
     @State private var pendingRating: Rating = .good
     @State private var showCardInfo = false
     @State private var cardStats: Anki_Stats_CardStatsResponse?
@@ -54,24 +54,11 @@ struct ReviewerView: View {
         }
         .onChange(of: colorScheme) { _, new in session.night = new == .dark }
         .onChange(of: session.generation) { _, _ in
-            // A new card became current: snap back to its question page without animation.
+            // A new card became current: close the answer panel without animation.
+            // The pager repositions itself from the new slot ids.
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { page = PageID.question.rawValue; reveal = 0 }
+            withTransaction(t) { reveal = 0; slot = .question }
             pendingRating = .good
-        }
-        .onChange(of: page) { _, new in
-            guard let new, session.phase == .studying else { return }
-            switch PageID(rawValue: new) {
-            case .previous:
-                Task { await session.undo() }
-            case .answer:
-                if !session.isNative { Task { await session.revealAnswer() } }
-            case .next:
-                let rating = pendingRating
-                Task { await session.answer(rating) }
-            default:
-                break
-            }
         }
         .onDisappear {
             Task {
@@ -116,49 +103,87 @@ struct ReviewerView: View {
         }
     }
 
+    /// Slots the pager shows, in order. `previous` only exists once a card has
+    /// been answered, so the question is not always slot 0.
+    private var slots: [PageID] {
+        var out: [PageID] = []
+        if session.previous != nil { out.append(.previous) }
+        out.append(.question)
+        if !session.isNative { out.append(.answer) }
+        out.append(.next)
+        return out
+    }
+
     private func reel(_ cur: ReviewSession.Current) -> some View {
         GeometryReader { geo in
             let h = geo.size.height
             let native = session.isNative
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    if let prev = session.previous {
-                        anyPage(prev, height: h, interactive: false, progress: 0)
-                            .overlay(alignment: .bottom) {
-                                Text("下に引くと戻ります(回答を取り消し)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 110)
-                            }
-                            .id(PageID.previous.rawValue)
-                    }
-                    if native, let n = cur.native {
-                        NativeCardPage(card: n, memo: cur.memo, height: h, progress: reveal, interactive: true) { tags in
-                            session.audio.play(tags)
-                        }
-                        .id("n\(cur.queued.card.id)")
-                        .gesture(revealGesture(height: h))
-                        .onTapGesture { openAnswer() }
-                        .id(PageID.question.rawValue)
-                    } else {
-                        cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: h, isQuestion: true)
-                            .id(PageID.question.rawValue)
-                        cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: h, isQuestion: false)
-                            .id(PageID.answer.rawValue)
-                    }
-                    Group {
-                        if let nxt = session.next {
-                            anyPage(nxt, height: h, interactive: false, progress: 0)
-                        } else {
-                            endPage(height: h)
-                        }
-                    }
-                    .id(PageID.next.rawValue)
+            let order = slots
+            ReelPager(
+                // Identity per slot: a new card gives new ids, so the cells rebuild
+                // once instead of the whole stack diffing every frame.
+                slotIDs: order.map { "\(cur.queued.card.id)-\($0.rawValue)" },
+                current: order.firstIndex(of: slot) ?? order.firstIndex(of: .question) ?? 0,
+                // While the answer is closed the reveal drag owns the touch, and
+                // while it is in flight nothing may take paging back.
+                scrollEnabled: (!native || session.answerRevealed) && !dragging,
+                page: { index in
+                    slotView(order[index], cur: cur, height: h, native: native)
+                },
+                onSettle: { index in
+                    slot = order[index]
+                    settled(order[index])
                 }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollPosition(id: $page)
-            .scrollBounceBehavior(.basedOnSize)
-            .scrollDisabled(native && !session.answerRevealed)
+            )
             .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    @ViewBuilder
+    private func slotView(_ slot: PageID, cur: ReviewSession.Current, height: CGFloat, native: Bool) -> some View {
+        switch slot {
+        case .previous:
+            if let prev = session.previous {
+                anyPage(prev, height: height, interactive: false, progress: 0)
+                    .overlay(alignment: .bottom) {
+                        Text("下に引くと戻ります(回答を取り消し)").font(.caption2).foregroundStyle(Theme.gray2).padding(.bottom, 110)
+                    }
+            }
+        case .question:
+            if native, let n = cur.native {
+                NativeCardPage(card: n, memo: cur.memo, height: height, progress: reveal, interactive: true) { tags in
+                    session.audio.play(tags)
+                }
+                .gesture(revealGesture(height: height))
+                .onTapGesture { openAnswer() }
+            } else {
+                cardPage(html: cur.questionHTML, key: "q\(cur.queued.card.id)", height: height, isQuestion: true)
+            }
+        case .answer:
+            cardPage(html: cur.answerHTML, key: "a\(cur.queued.card.id)", height: height, isQuestion: false)
+        case .next:
+            if let nxt = session.next {
+                anyPage(nxt, height: height, interactive: false, progress: 0)
+            } else {
+                endPage(height: height)
+            }
+        }
+    }
+
+    /// The pager finished on `slot`. Replaces the old position binding, which
+    /// fired on every intermediate offset.
+    private func settled(_ slot: PageID) {
+        guard session.phase == .studying else { return }
+        switch slot {
+        case .previous:
+            Task { await session.undo() }
+        case .answer:
+            if !session.isNative { Task { await session.revealAnswer() } }
+        case .next:
+            let rating = pendingRating
+            Task { await session.answer(rating) }
+        case .question:
+            break
         }
     }
 
@@ -230,10 +255,10 @@ struct ReviewerView: View {
     private func handle(_ event: CardWebEvent, isQuestion: Bool) {
         switch event {
         case .tap(let typed), .showAnswer(let typed):
-            if isQuestion, page == PageID.question.rawValue {
+            if isQuestion, slot == .question {
                 Task {
                     await session.revealAnswer(typed: typed)
-                    withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                    slot = .answer
                 }
             }
         case .play(let side, let idx):
@@ -245,20 +270,19 @@ struct ReviewerView: View {
         }
     }
 
-    /// Animate to the next card, committing `rating` when the page settles.
+    /// Record `rating` and move on. Paging no longer drives this: the pager
+    /// reports a settle, and a rating from a button or a swipe commits directly.
     private func commit(_ rating: Rating) {
         guard session.phase == .studying else { return }
         pendingRating = rating
-        if page == PageID.next.rawValue {
-            Task { await session.answer(rating) }
-        } else if session.isNative && !session.answerRevealed {
-            // Rating without opening the answer (e.g. left swipe = again): open, then move on.
+        if session.isNative && !session.answerRevealed {
+            // Rating without opening the answer (e.g. left swipe = again).
             Task {
                 await session.revealAnswer()
-                withAnimation(.easeInOut(duration: 0.3)) { page = PageID.next.rawValue }
+                await session.answer(rating)
             }
         } else {
-            withAnimation(.easeInOut(duration: 0.3)) { page = PageID.next.rawValue }
+            Task { await session.answer(rating) }
         }
     }
 
@@ -298,7 +322,7 @@ struct ReviewerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: session.flash)
-        .animation(.easeInOut(duration: 0.2), value: page)
+        .animation(.easeInOut(duration: 0.2), value: slot)
     }
 
     /// Reels-style column on the right edge: rating buttons (answer side) or
@@ -306,7 +330,7 @@ struct ReviewerView: View {
     private var rightRail: some View {
         VStack(spacing: 12) {
             Spacer()
-            if page == PageID.answer.rawValue || (session.isNative && session.answerRevealed && page == PageID.question.rawValue) {
+            if slot == .answer || (session.isNative && session.answerRevealed && slot == .question) {
                 railButton(.easy, title: "簡単", symbol: "sparkles")
                 railButton(.good, title: "普通", symbol: "checkmark")
                 railButton(.hard, title: "難しい", symbol: "tortoise")
@@ -324,14 +348,14 @@ struct ReviewerView: View {
                         Text("メモ").font(.caption2).foregroundStyle(Theme.gray1)
                     }
                 }
-            } else if page == PageID.question.rawValue {
+            } else if slot == .question {
                 Button {
                     if session.isNative {
                         openAnswer()
                     } else {
                         Task {
                             await session.revealAnswer()
-                            withAnimation(.easeInOut(duration: 0.3)) { page = PageID.answer.rawValue }
+                            slot = .answer
                         }
                     }
                 } label: {
@@ -371,7 +395,7 @@ struct ReviewerView: View {
     /// Replay button, bottom centre.
     private var bottomCenter: some View {
         VStack(spacing: 8) {
-            if !session.isNative, page == PageID.answer.rawValue, let memo = session.current?.memo, !memo.isEmpty {
+            if !session.isNative, slot == .answer, let memo = session.current?.memo, !memo.isEmpty {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "note.text").font(.caption).foregroundStyle(Theme.gray1).padding(.top, 2)
                     Text(memo).font(.footnote).foregroundStyle(Theme.ink).lineLimit(4)
@@ -407,7 +431,7 @@ struct ReviewerView: View {
         if session.isNative, let n = cur.native {
             return session.answerRevealed ? !(n.answerAudio.isEmpty && n.questionAudio.isEmpty) : !n.questionAudio.isEmpty
         }
-        return page == PageID.answer.rawValue ? !cur.answer.avTags.isEmpty : !cur.question.avTags.isEmpty
+        return slot == .answer ? !cur.answer.avTags.isEmpty : !cur.question.avTags.isEmpty
     }
 
     private var topBar: some View {

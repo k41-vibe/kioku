@@ -78,6 +78,11 @@ final class ReviewSession {
     var previous: Current? { history.last }
     var counts = Counts()
     var answerRevealed = false
+    /// How far the answer panel is pulled up (0...1), and whether a finger is
+    /// still on it. Observed rather than passed in: the pager hosts each page in
+    /// a cell whose content is built once, so a plain value would freeze there.
+    var reveal: CGFloat = 0
+    var dragging = false
     var answeredCount = 0
     var againCount = 0
     var flash: String?
@@ -294,6 +299,7 @@ final class ReviewSession {
             if var n = nxt { render(&n); next = n } else { next = nil }
             current = cur
             answerRevealed = false
+            reveal = 0
             generation += 1
             phase = .studying
             playQuestionAudio()

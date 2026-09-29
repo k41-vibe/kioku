@@ -17,9 +17,6 @@ struct ReviewerView: View {
     @State private var lastGeneration = 0
     @State private var showMemoEditor = false
     @State private var memoDraft = ""
-    /// Native layout: how far the answer panel is pulled up (0...1).
-    @State private var reveal: CGFloat = 0
-    @State private var dragging = false
     /// Shorts break: ids fetched once per session, and the count at the last break
     /// (so undo lowering `answeredCount` cannot trigger the same break again).
     @State private var shortIDs: [String] = []
@@ -57,7 +54,7 @@ struct ReviewerView: View {
             // A new card became current: close the answer panel without animation.
             // The pager repositions itself from the new slot ids.
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { reveal = 0; slot = .question }
+            withTransaction(t) { slot = .question }
             pendingRating = .good
         }
         .onDisappear {
@@ -126,7 +123,7 @@ struct ReviewerView: View {
                 current: order.firstIndex(of: slot) ?? order.firstIndex(of: .question) ?? 0,
                 // While the answer is closed the reveal drag owns the touch, and
                 // while it is in flight nothing may take paging back.
-                scrollEnabled: (!native || session.answerRevealed) && !dragging,
+                scrollEnabled: (!native || session.answerRevealed) && !session.dragging,
                 page: { index in
                     slotView(order[index], cur: cur, height: h, native: native)
                 },
@@ -151,7 +148,7 @@ struct ReviewerView: View {
             }
         case .question:
             if native, let n = cur.native {
-                NativeCardPage(card: n, memo: cur.memo, height: height, progress: reveal, interactive: true) { tags in
+                NativeQuestionPage(session: session, card: n, memo: cur.memo, height: height) { tags in
                     session.audio.play(tags)
                 }
                 .gesture(revealGesture(height: height))
@@ -206,30 +203,30 @@ struct ReviewerView: View {
                 let dy = v.translation.height
                 let dx = v.translation.width
                 if abs(dx) > abs(dy) { return }
-                dragging = true
-                reveal = min(max(-dy / (height * 0.45), 0), 1)
+                session.dragging = true
+                session.reveal = min(max(-dy / (height * 0.45), 0), 1)
             }
             .onEnded { v in
                 let dy = v.translation.height
                 let dx = v.translation.width
-                dragging = false
+                session.dragging = false
                 if !session.answerRevealed && abs(dx) > 70 && abs(dx) > abs(dy) * 1.5 {
                     if dx < 0 { commit(.again) }
-                    withAnimation(.easeOut(duration: 0.2)) { reveal = 0 }
+                    withAnimation(.easeOut(duration: 0.2)) { session.reveal = 0 }
                     return
                 }
                 guard !session.answerRevealed else { return }
-                if reveal > 0.3 || v.predictedEndTranslation.height < -160 {
+                if session.reveal > 0.3 || v.predictedEndTranslation.height < -160 {
                     openAnswer()
                 } else {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { reveal = 0 }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { session.reveal = 0 }
                 }
             }
     }
 
     private func openAnswer() {
         guard session.phase == .studying, !session.answerRevealed else { return }
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { reveal = 1 }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { session.reveal = 1 }
         Task { await session.revealAnswer() }
     }
 
@@ -601,5 +598,21 @@ struct MemoEditorView: View {
             }
             .onAppear { focused = true }
         }
+    }
+}
+
+/// Reads the pull-up progress inside its own body, so the page re-renders when
+/// it moves. The pager builds each cell's content once; a value read where the
+/// cell is configured would stay frozen at whatever it was then.
+private struct NativeQuestionPage: View {
+    let session: ReviewSession
+    let card: NativeCard
+    let memo: String
+    let height: CGFloat
+    var onPlay: ([Anki_CardRendering_AVTag]) -> Void
+
+    var body: some View {
+        NativeCardPage(card: card, memo: memo, height: height,
+                       progress: session.reveal, interactive: true, onPlay: onPlay)
     }
 }

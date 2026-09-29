@@ -27,7 +27,8 @@
 
   <div class="card">
     <div class="ver" id="ver">最新版を確認中…</div>
-    <a class="btn" id="install" href="#">LiveContainer で更新</a>
+    <a class="btn" id="copy" href="#">ipa の URL をコピー</a>
+    <a class="btn secondary" id="install" href="#">LiveContainer で更新(通らない端末あり)</a>
     <a class="btn secondary" id="page" href="https://github.com/k41-vibe/kioku/releases/latest">Release ページ(手動で入れる場合)</a>
     <p id="err"></p>
   </div>
@@ -35,7 +36,8 @@
   <div class="card">
     <ol>
       <li><strong>Kioku を終了してから</strong>押してください(Kioku は LiveContainer の中で動くので、開いたままだと LiveContainer が受け取れません)。アプリ内の「LiveContainer で更新」から来た場合は自動で終了しています。</li>
-      <li>「LiveContainer で更新」を押す → LiveContainer が開く → 「既にあるアプリを置き換える」を選ぶ</li>
+      <li>「ipa の URL をコピー」を押す。LiveContainer を開き、Apps 画面の右上にあるリンクの記号を押して貼り付ける</li>
+      <li>「既にあるアプリを置き換える」を選ぶ</li>
       <li>一覧の Kioku を起動。画面下の版番号が新しくなっていれば完了</li>
     </ol>
   </div>
@@ -56,6 +58,20 @@
     ver.textContent = '最新版 ' + j.tag_name + (cur ? '(今の版 ' + cur + ')' : '');
     btn.href = 'livecontainer://install?url=' + encodeURIComponent(ipa.browser_download_url);
     document.getElementById('page').href = j.html_url;
+    // The livecontainer:// scheme is refused as an unsupported URL on some
+    // versions, so hand over the plain URL for the Apps tab's link field.
+    const copy = document.getElementById('copy');
+    copy.href = ipa.browser_download_url;
+    copy.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      try {
+        await navigator.clipboard.writeText(ipa.browser_download_url);
+        copy.textContent = 'コピーしました';
+      } catch (_) {
+        err.textContent = ipa.browser_download_url;
+        copy.textContent = '長押しでコピーしてください';
+      }
+    });
   } catch (e) {
     ver.textContent = '最新版の情報を取れませんでした';
     err.textContent = String(e);

@@ -16,17 +16,16 @@ struct NativeCardPage: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            questionBlock
+                .frame(width: nil, height: height)
+                .offset(y: -progress * questionLift)
             // The question slides up behind the toolbar when the answer opens, so
-            // fade its top edge. The mask sits on the page (not on the moving
-            // block) so the text dissolves as it travels into the strip.
-            Color.clear
-                .frame(height: height)
-                .overlay(
-                    questionBlock
-                        .frame(width: nil, height: height)
-                        .offset(y: -progress * questionLift)
-                )
-                .mask(topFade)
+            // cover the strip it travels into. Painted over the block rather than
+            // masked: a mask also removes hit testing, which fed drags straight to
+            // the pager and skipped cards.
+            topFade
+                .frame(height: height * 0.13)
+                .allowsHitTesting(false)
             answerPanel
                 .frame(height: answerHeight)
                 .offset(y: height - progress * answerHeight)
@@ -37,14 +36,13 @@ struct NativeCardPage: View {
         .contentShape(Rectangle())
     }
 
-    /// Clear at the very top, solid below the toolbar strip. Only bites while the
-    /// block is lifted — at rest the question sits in the middle of the page.
+    /// Page colour at the top, transparent below, so text sliding up dissolves
+    /// before it reaches the toolbar.
     private var topFade: some View {
         LinearGradient(stops: [
-            .init(color: .clear, location: 0),
-            .init(color: .black.opacity(0.15), location: 0.045),
-            .init(color: .black, location: 0.105),
-            .init(color: .black, location: 1),
+            .init(color: Theme.paper, location: 0),
+            .init(color: Theme.paper, location: 0.55),
+            .init(color: Theme.paper.opacity(0), location: 1),
         ], startPoint: .top, endPoint: .bottom)
     }
 

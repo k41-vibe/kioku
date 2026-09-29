@@ -172,7 +172,15 @@ jobs:
         id: ver
         run: |
           TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag }}"
-          V="${TAG#v}"; [ -n "$V" ] || V="0.0.$(date -u +%Y%m%d)"
+          V="${TAG#v}"
+          if [ -z "$V" ]; then
+            # Untagged build. Date-based versions sort below the releases they are
+            # newer than ("0.0.20260928" < "0.1.0"), which made the app offer an
+            # older release as an update. Extend the newest tag instead.
+            git fetch --depth=1 origin '+refs/tags/*:refs/tags/*' || true
+            BASE="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+            V="${BASE#v}.${{ github.run_number }}"
+          fi
           echo "marketing=$V" >> "$GITHUB_OUTPUT"
           echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           echo "version $V build ${{ github.run_number }}"

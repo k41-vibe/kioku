@@ -547,6 +547,24 @@ final class KiokuCoreTests: XCTestCase {
                        "https://www.youtube.com/embed/abc?playsinline=1&autoplay=1&rel=0")
     }
 
+    /// The player answers error 153 when the request carries no origin, so the
+    /// iframe must be wrapped in a document and keep its referrer policy.
+    func testShortsEmbedHTMLCarriesReferrerPolicy() {
+        let html = ShortsBreak.embedHTML("abc")
+        XCTAssertTrue(html.contains("https://www.youtube.com/embed/abc?"))
+        XCTAssertTrue(html.contains("referrerpolicy=\"strict-origin-when-cross-origin\""))
+        XCTAssertTrue(html.contains("allow=\"autoplay;"))
+        XCTAssertEqual(ShortsBreak.embedBaseURL.host, "k41-vibe.github.io",
+                       "the base URL must be a domain we control, so the referrer is truthful")
+    }
+
+    func testUpdaterOrdersDevBuildsAboveReleases() {
+        XCTAssertTrue(Updater.isNewer("0.1.0.47", than: "0.1.0"), "an untagged build extends the newest tag")
+        XCTAssertFalse(Updater.isNewer("0.1.0", than: "0.1.0.47"))
+        XCTAssertFalse(Updater.isNewer("0.0.20260928", than: "0.1.0"),
+                       "the old date-based scheme sorted below the release, which caused the bad prompt")
+    }
+
     // MARK: - Reset
 
     func testResetScopeSliceClamps() {

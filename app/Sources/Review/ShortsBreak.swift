@@ -79,6 +79,25 @@ enum ShortsBreak {
         URL(string: "https://www.youtube.com/embed/\(videoID)?playsinline=1&autoplay=1&rel=0")
     }
 
+    /// The player refuses a request with no identifiable origin (error 153), and
+    /// WKWebView sends none when it loads the embed URL itself. Wrapping the
+    /// iframe in a document loaded from our own pages domain gives it one.
+    static let embedBaseURL = URL(string: "https://k41-vibe.github.io/kioku/")!
+
+    static func embedHTML(_ videoID: String) -> String {
+        let src = embedURL(videoID)?.absoluteString ?? ""
+        return """
+        <!doctype html><html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+        <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}
+        iframe{border:0;width:100%;height:100%;display:block}</style>
+        </head><body>
+        <iframe src="\(src)" referrerpolicy="strict-origin-when-cross-origin"
+                allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+        </body></html>
+        """
+    }
+
     /// Trending Shorts ids, or an empty list when no key is set or the call fails.
     static func fetchIDs() async -> [String] {
         guard let url = trendingURL(apiKey: apiKey, region: region) else { return [] }
@@ -193,20 +212,20 @@ struct ShortsBreakView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
             }
-            if let url = ShortsBreak.embedURL(videoID) {
-                WebPage(url: url)
-            } else {
-                Spacer()
-            }
+            WebPage(html: ShortsBreak.embedHTML(videoID), baseURL: ShortsBreak.embedBaseURL)
         }
         .background(Color.black.ignoresSafeArea())
     }
 }
 
-/// Minimal WKWebView for one URL. The card renderer's web view carries a custom
-/// scheme handler and message handlers it does not need here.
+/// Minimal WKWebView for one HTML document. The card renderer's web view carries
+/// a custom scheme handler and message handlers it does not need here.
 struct WebPage: UIViewRepresentable {
-    let url: URL
+    let html: String
+    let baseURL: URL
+
+    final class Coordinator { var loaded: String? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -220,6 +239,8 @@ struct WebPage: UIViewRepresentable {
     }
 
     func updateUIView(_ web: WKWebView, context: Context) {
-        if web.url != url { web.load(URLRequest(url: url)) }
+        guard context.coordinator.loaded != html else { return }
+        context.coordinator.loaded = html
+        web.loadHTMLString(html, baseURL: baseURL)
     }
 }

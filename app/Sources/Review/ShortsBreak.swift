@@ -129,9 +129,33 @@ enum ShortsBreak {
         return out
     }
 
-    /// Shorts the signed-in account is offered. Empty when no cookie is stored
-    /// or YouTube answers with anything but the feed.
-    static func fetchPersonalIDs() async -> [String] {
+    /// Ids from `incoming` that are not in `existing`, appended in order.
+    static func merged(_ existing: [String], _ incoming: [String]) -> [String] {
+        var seen = Set(existing)
+        var out = existing
+        for id in incoming where seen.insert(id).inserted { out.append(id) }
+        return out
+    }
+
+    /// Shorts the signed-in account is offered. One request returns a single
+    /// video, so ask repeatedly and keep what is new until there is enough to
+    /// rotate through.
+    ///
+    /// ponytail: repeated page loads. The reel sequence endpoint would return a
+    /// list in one call, but it is an internal API with its own client context.
+    static func fetchPersonalIDs(rounds: Int = 8, want: Int = 12) async -> [String] {
+        var out: [String] = []
+        for _ in 0..<max(rounds, 1) {
+            let page = await fetchPersonalPage()
+            if page.isEmpty { break }
+            out = merged(out, page)
+            if out.count >= want { break }
+        }
+        return out
+    }
+
+    /// One request to the signed-in Shorts page.
+    private static func fetchPersonalPage() async -> [String] {
         let cookie = CookieStore.load()
         guard !cookie.isEmpty, let url = URL(string: "https://www.youtube.com/shorts") else { return [] }
 

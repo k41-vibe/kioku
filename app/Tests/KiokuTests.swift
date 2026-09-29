@@ -537,6 +537,13 @@ final class KiokuCoreTests: XCTestCase {
         XCTAssertTrue(ShortsBreak.feedIDs(inHTML: "<html>signed out</html>").isEmpty)
     }
 
+    func testShortsMergeKeepsOrderAndSkipsSeen() {
+        XCTAssertEqual(ShortsBreak.merged(["a", "b"], ["b", "c", "a", "d"]), ["a", "b", "c", "d"],
+                       "new ids append in order; ones already held are skipped")
+        XCTAssertEqual(ShortsBreak.merged([], ["a", "a"]), ["a"], "a repeat inside one page counts once")
+        XCTAssertEqual(ShortsBreak.merged(["a"], []), ["a"])
+    }
+
     func testShortsURLsNeedAKey() throws {
         XCTAssertNil(ShortsBreak.trendingURL(apiKey: "", region: "JP"))
         let url = try XCTUnwrap(ShortsBreak.trendingURL(apiKey: "k123", region: "JP"))

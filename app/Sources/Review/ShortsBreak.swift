@@ -108,33 +108,30 @@ enum ShortsBreak {
 
     // MARK: - Signed-in feed
 
-    /// Video ids in the order youtube.com/shorts returned them. The page embeds
+    /// Places a Shorts id appears in the page. A bare `"videoId"` is not enough:
+    /// the page also carries ids for ordinary videos elsewhere in its data, and
+    /// those played full-length songs as breaks.
+    private static let shortsPatterns = [
+        #"reelWatchEndpoint"\s*:\s*\{"videoId":"([A-Za-z0-9_-]{11})""#,
+        #""url":"/shorts/([A-Za-z0-9_-]{11})""#,
+    ]
+
+    /// Shorts ids in the order youtube.com/shorts returned them. The page embeds
     /// its data as `ytInitialData` in the HTML, so the ids are readable without
     /// running the page's JavaScript.
     ///
     /// ponytail: regex over the served HTML. If YouTube stops embedding
     /// ytInitialData, read the ids from a WKWebView instead.
     static func feedIDs(inHTML html: String, limit: Int = 20) -> [String] {
-        guard let re = try? NSRegularExpression(pattern: #""videoId":"([A-Za-z0-9_-]{11})""#) else { return [] }
         let ns = html as NSString
-        var seen = Set<String>()
+        let whole = NSRange(location: 0, length: ns.length)
         var out: [String] = []
-        for m in re.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
-            let id = ns.substring(with: m.range(at: 1))
-            if seen.insert(id).inserted {
-                out.append(id)
-                if out.count >= limit { break }
-            }
+        for pattern in shortsPatterns {
+            guard let re = try? NSRegularExpression(pattern: pattern) else { continue }
+            let found = re.matches(in: html, range: whole).map { ns.substring(with: $0.range(at: 1)) }
+            out = merged(out, found)
         }
-        return out
-    }
-
-    /// Ids from `incoming` that are not in `existing`, appended in order.
-    static func merged(_ existing: [String], _ incoming: [String]) -> [String] {
-        var seen = Set(existing)
-        var out = existing
-        for id in incoming where seen.insert(id).inserted { out.append(id) }
-        return out
+        return Array(out.prefix(limit))
     }
 
     /// Shorts the signed-in account is offered. One request returns a single

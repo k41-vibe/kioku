@@ -524,17 +524,24 @@ final class KiokuCoreTests: XCTestCase {
                        "over a minute, missing details and zero length are all dropped")
     }
 
-    func testShortsFeedIDsKeepOrderAndDropDuplicates() {
+    /// Taken from the shape the real page serves: only ids under a reel
+    /// endpoint or a /shorts/ path are Shorts. A bare "videoId" elsewhere in the
+    /// data is an ordinary video, and playing those broke the break.
+    func testShortsFeedIDsTakeOnlyShorts() {
         let html = """
-        <script>var ytInitialData = {"a":{"videoId":"aaaaaaaaaaa"},
-        "b":{"videoId":"bbbbbbbbbbb"},"c":{"videoId":"aaaaaaaaaaa"},
-        "d":{"videoId":"tooshort"},"e":{"videoId":"ccccccccccc"}};</script>
+        {"reelWatchEndpoint":{"videoId":"LAPbLYsAmko","playerParams":"8AEB"},
+         "reelWatchEndpoint":{"playerParams":"8AEB","overlay":{}},
+         "videoId":"lTAfJcNi130",
+         "compactVideoRenderer":{"videoId":"aaaaaaaaaaa"},
+         "url":"/shorts/GT1VenQWf2o",
+         "url":"/shorts/LAPbLYsAmko",
+         "url":"/watch?v=bbbbbbbbbbb"}
         """
-        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html),
-                       ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"],
-                       "first-seen order, no repeats, ids are always 11 characters")
-        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html, limit: 2), ["aaaaaaaaaaa", "bbbbbbbbbbb"])
+        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html), ["LAPbLYsAmko", "GT1VenQWf2o"])
+        XCTAssertEqual(ShortsBreak.feedIDs(inHTML: html, limit: 1), ["LAPbLYsAmko"])
         XCTAssertTrue(ShortsBreak.feedIDs(inHTML: "<html>signed out</html>").isEmpty)
+        XCTAssertTrue(ShortsBreak.feedIDs(inHTML: #"{"videoId":"lTAfJcNi130"}"#).isEmpty,
+                      "an id with no Shorts marker is never taken")
     }
 
     func testShortsMergeKeepsOrderAndSkipsSeen() {

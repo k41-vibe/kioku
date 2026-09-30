@@ -108,6 +108,14 @@ enum ShortsBreak {
 
     // MARK: - Signed-in feed
 
+    /// Ids from `incoming` that are not in `existing`, appended in order.
+    static func merged(_ existing: [String], _ incoming: [String]) -> [String] {
+        var seen = Set(existing)
+        var out = existing
+        for id in incoming where seen.insert(id).inserted { out.append(id) }
+        return out
+    }
+
     /// Places a Shorts id appears in the page. A bare `"videoId"` is not enough:
     /// the page also carries ids for ordinary videos elsewhere in its data, and
     /// those played full-length songs as breaks.

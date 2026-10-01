@@ -544,6 +544,22 @@ final class KiokuCoreTests: XCTestCase {
                       "an id with no Shorts marker is never taken")
     }
 
+    // MARK: - Line breaking
+
+    func testLineBreakLeavesEnglishAlone() {
+        let s = "Scientists are studying how air pollution affects children's health."
+        XCTAssertEqual(LineBreak.keepingWords(s), s)
+    }
+
+    func testLineBreakKeepsJapaneseWordsWhole() {
+        let s = "科学者は大気汚染が子供たちの健康にいかに影響を及ぼすのかを研究している。"
+        let out = LineBreak.keepingWords(s)
+        XCTAssertEqual(out.replacingOccurrences(of: LineBreak.joiner, with: ""), s,
+                       "only joiners are added: nothing lost, nothing reordered")
+        XCTAssertTrue(out.contains("健\u{2060}康"), "the reported split, 健 / 康, can no longer happen")
+        XCTAssertTrue(out.contains("康\u{2060}に"), "a particle stays on the line of the word before it")
+    }
+
     func testShortsMergeKeepsOrderAndSkipsSeen() {
         XCTAssertEqual(ShortsBreak.merged(["a", "b"], ["b", "c", "a", "d"]), ["a", "b", "c", "d"],
                        "new ids append in order; ones already held are skipped")

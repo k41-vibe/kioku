@@ -1,3 +1,4 @@
+import NaturalLanguage
 import SwiftUI
 
 /// One reel page laid out natively: the question block (word / reading /
@@ -50,20 +51,21 @@ struct NativeCardPage: View {
         VStack(spacing: 14) {
             Spacer()
             if !card.reading.isEmpty {
-                Text(card.reading).font(.footnote).foregroundStyle(Theme.gray1)
+                Text(LineBreak.keepingWords(card.reading)).font(.footnote).foregroundStyle(Theme.gray1)
             }
             HStack(alignment: .center, spacing: 10) {
                 Text(card.word)
                     .font(.system(size: card.word.count > 14 ? 30 : 40, weight: .bold, design: .rounded))
                     .multilineTextAlignment(.center)
-                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)                 // shrink to fit rather than split the word
+                    .minimumScaleFactor(0.4)
                 if !card.wordAudio.isEmpty && interactive {
                     playButton { onPlay(card.questionAudio) }
                 }
             }
             if !card.example.isEmpty {
                 VStack(spacing: 8) {
-                    Text(card.example)
+                    Text(LineBreak.keepingWords(card.example))
                         .font(.title3)
                         .foregroundStyle(Theme.ink.opacity(0.9))
                         .multilineTextAlignment(.center)
@@ -90,14 +92,14 @@ struct NativeCardPage: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(card.meaning.enumerated()), id: \.offset) { _, m in
-                        Text(m)
+                        Text(LineBreak.keepingWords(m))
                             .font(.title2.weight(.semibold))
                             .lineSpacing(3)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .multilineTextAlignment(.center)
                     }
                     if !card.exampleMeaning.isEmpty {
-                        Text(card.exampleMeaning)
+                        Text(LineBreak.keepingWords(card.exampleMeaning))
                             .font(.body)
                             .foregroundStyle(Theme.ink.opacity(0.85))
                             .lineSpacing(3)
@@ -109,7 +111,7 @@ struct NativeCardPage: View {
                         ForEach(Array(card.extras.enumerated()), id: \.offset) { _, pair in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(pair.0).font(.caption2).foregroundStyle(Theme.gray1)
-                                Text(pair.1).font(.footnote).lineSpacing(2)
+                                Text(LineBreak.keepingWords(pair.1)).font(.footnote).lineSpacing(2)
                             }
                         }
                     }
@@ -117,7 +119,7 @@ struct NativeCardPage: View {
                         Divider().padding(.vertical, 2)
                         HStack(alignment: .top, spacing: 6) {
                             Image(systemName: "note.text").font(.caption).foregroundStyle(Theme.gray1).padding(.top, 2)
-                            Text(memo).font(.footnote)
+                            Text(LineBreak.keepingWords(memo)).font(.footnote)
                         }
                     }
                     Spacer().frame(height: 60)
@@ -145,5 +147,46 @@ struct NativeCardPage: View {
                 .foregroundStyle(Theme.ink)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Japanese has no spaces, so the line breaker may wrap between any two
+/// characters and splits words ("健康" became 健 / 康). Glue the characters of
+/// each word, and attach hiragana runs (particles, verb endings) to the word
+/// before them, so lines break only between phrases. Text without Japanese is
+/// returned unchanged.
+enum LineBreak {
+    /// U+2060 WORD JOINER: zero width, forbids a break at its position.
+    static let joiner = "\u{2060}"
+
+    static func keepingWords(_ s: String) -> String {
+        guard s.unicodeScalars.contains(where: isJapanese) else { return s }
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = s
+        tokenizer.setLanguage(.japanese)
+        var out = ""
+        var cursor = s.startIndex
+        var afterWord = false
+        tokenizer.enumerateTokens(in: s.startIndex..<s.endIndex) { range, _ in
+            let gap = s[cursor..<range.lowerBound]
+            let word = s[range]
+            out += gap
+            // A particle directly after a word stays on that word's line.
+            if gap.isEmpty, afterWord, word.unicodeScalars.allSatisfy(isHiragana) {
+                out += joiner
+            }
+            out += word.map(String.init).joined(separator: joiner)
+            cursor = range.upperBound
+            afterWord = true
+            return true
+        }
+        out += s[cursor...]
+        return out
+    }
+
+    private static func isHiragana(_ u: Unicode.Scalar) -> Bool { (0x3040...0x309F).contains(u.value) }
+
+    private static func isJapanese(_ u: Unicode.Scalar) -> Bool {
+        (0x3040...0x30FF).contains(u.value) || (0x4E00...0x9FFF).contains(u.value)
     }
 }
